@@ -278,14 +278,37 @@ def _cylinder_props(tag: int):
 
 
 def build_catalogue(step_path: str) -> Catalogue:
-    """Read a STEP and produce the face catalogue. Deterministic, no LLM."""
+    """Read a STEP and produce the face catalogue in a THROWAWAY Gmsh session.
+
+    Convenience wrapper for inspection only. The face tags it returns belong to
+    a model that is destroyed before this function returns. Do NOT carry those
+    tags into a separate meshing session: tag numbering across two independent
+    imports of the same STEP is usually identical but is not guaranteed, and a
+    silently shifted tag attaches a load to the wrong face and still solves.
+
+    For anything that feeds the mesh, use GeomSession (geom_session.py), which
+    builds the catalogue and meshes inside ONE session and one tag namespace.
+    """
     gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("catalogue")
         gmsh.model.occ.importShapes(step_path)
         gmsh.model.occ.synchronize()
+        return catalogue_from_open_model(step_path)
+    finally:
+        gmsh.finalize()
 
+
+def catalogue_from_open_model(step_path_label: str = "") -> Catalogue:
+    """Build the catalogue from the CURRENTLY OPEN Gmsh model.
+
+    Assumes gmsh is initialized, the shape is imported and occ.synchronize()
+    has been called. Owns no session and finalizes nothing, so the tags it
+    returns stay valid for the caller.
+    """
+    if True:
+        step_path = step_path_label
         xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(-1, -1)
         vol = sum(gmsh.model.occ.getMass(3, t)
                   for d, t in gmsh.model.getEntities(3))
@@ -313,8 +336,6 @@ def build_catalogue(step_path: str) -> Catalogue:
                         volume=vol)
         cat.groups = _group_faces(cat)
         return cat
-    finally:
-        gmsh.finalize()
 
 
 # ---------------------------------------------------------------------------
@@ -477,18 +498,85 @@ class NamedSelection:
 
 
 def tag_selections_in_gmsh(selections: Sequence[NamedSelection]) -> Dict[str, int]:
-    """Create a physical surface group per selection.
+    """DEPRECATED. Do not use for CalculiX or Abaqus decks.
 
-    Call this AFTER importing the STEP and BEFORE meshing. Gmsh then writes the
-    face sets into the deck, which is what the load and constraint writer will
-    reference. Without this step the deck contains only the solid and there is
-    nothing to attach a BC to.
+    MEASURED, not assumed (gmsh 4.15.2): adding a 2D physical group makes Gmsh
+    write the surface mesh into the .inp as plane-stress elements, for example
+      *ELEMENT, type=CPS6, ELSET=Surface1
+    Those elements have no *SOLID SECTION and no material. CalculiX either
+    rejects the deck or treats them as real load-carrying elements, which is
+    exactly the silent-wrong-answer failure this project exists to prevent.
+
+    Use face_node_sets() plus append_node_sets_inp() instead: node sets carry
+    the same face information and leave the element block untouched.
+
+    Kept only for .msh / FEniCSx workflows where 2D physical groups are the
+    normal way to mark boundaries.
     """
     created = {}
     for sel in selections:
         pg = gmsh.model.addPhysicalGroup(2, sel.tags, name=sel.name)
         created[sel.name] = pg
     return created
+
+
+def face_node_sets(selections: Sequence[NamedSelection],
+                   include_boundary: bool = True) -> Dict[str, List[int]]:
+    """Node tags lying on each selection's CAD faces, from the CURRENT mesh.
+
+    Call AFTER mesh.generate(3) and AFTER setOrder(), in the same session that
+    produced the mesh. Node tags are mesh entities: they are invalidated by
+    mesh.clear(), so this must be re-run after every remesh.
+
+    include_boundary=True also returns the nodes on the bounding curves and
+    corners of the face. For a constraint that is what you want, otherwise the
+    edge of a clamped face is left free. For a pressure load it slightly
+    over-reaches onto the adjacent face, which matters only if you convert the
+    set into nodal forces.
+    """
+    out: Dict[str, List[int]] = {}
+    for sel in selections:
+        tags: set = set()
+        for face in sel.tags:
+            nt, _, _ = gmsh.model.mesh.getNodes(
+                2, face, includeBoundary=include_boundary)
+            tags.update(int(t) for t in nt)
+        if not tags:
+            raise RuntimeError(
+                f"selection '{sel.name}' produced ZERO nodes on faces "
+                f"{sel.tags}. Either the faces were not meshed or this was "
+                f"called before generate(3). Refusing to write an empty set.")
+        out[sel.name] = sorted(tags)
+    return out
+
+
+def append_node_sets_inp(deck_path: str,
+                         node_sets: Dict[str, List[int]],
+                         per_line: int = 16) -> str:
+    """Append *NSET blocks to an Abaqus/CalculiX deck written by Gmsh.
+
+    Gmsh has no API for writing node sets from CAD faces, so this is done as a
+    deterministic text append. The element block is not touched.
+
+    Syntax notes, learned the hard way:
+      - NO trailing comma on a data line. Abaqus treats the comma as a
+        separator introducing a blank field, and a blank field in a set data
+        line can make the whole set be dropped silently. CalculiX tolerates
+        it, so a deck that works in CalculiX can still lose its sets in
+        Abaqus. That asymmetry is exactly the kind of silent difference that
+        would corrupt an oracle comparison.
+      - 16 values per line is the Abaqus limit.
+      - Set names: uppercase, no spaces, 80 characters maximum.
+    """
+    with open(deck_path, "a") as f:
+        f.write("**\n** node sets from CAD faces, written by "
+                "geometry_features.append_node_sets_inp\n**\n")
+        for name, tags in node_sets.items():
+            f.write(f"*NSET, NSET={name}\n")
+            for i in range(0, len(tags), per_line):
+                chunk = tags[i:i + per_line]
+                f.write(", ".join(str(t) for t in chunk) + "\n")
+    return deck_path
 
 
 # ---------------------------------------------------------------------------

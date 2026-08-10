@@ -226,25 +226,45 @@ def _bbox_and_size(req: MeshRequest) -> Tuple[Tuple[float, float, float], float]
     return bbox, size
 
 
-def mesh_step(req: MeshRequest, element: ElementSpec) -> Tuple[MeshQuality, str, str]:
-    """Generate the mesh. Deterministic Gmsh API calls, no generated code."""
-    if not os.path.exists(req.step_path):
+def mesh_step(req: MeshRequest, element: ElementSpec,
+              session=None) -> Tuple[MeshQuality, str, str]:
+    """Generate the mesh. Deterministic Gmsh API calls, no generated code.
+
+    Two modes:
+      session is None  legacy. Opens and closes its own Gmsh session. The face
+                      tags in that session are private to it, so no face
+                      selection can reach the deck. Kept for geometry-only
+                      meshing where there are no BCs yet.
+      session given    the GeomSession already holds the imported STEP, the
+                      catalogue and the SOLID physical group. This function
+                      only clears any previous mesh and remeshes IN PLACE, so
+                      CAD face tags stay valid across retries.
+    """
+    owns_session = session is None
+    if owns_session and not os.path.exists(req.step_path):
         raise FileNotFoundError(req.step_path)
 
-    gmsh.initialize()
+    if owns_session:
+        gmsh.initialize()
     try:
-        gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.model.add("part")
-        gmsh.model.occ.importShapes(req.step_path)
-        gmsh.model.occ.synchronize()
+        if owns_session:
+            gmsh.option.setNumber("General.Terminal", 0)
+            gmsh.model.add("part")
+            gmsh.model.occ.importShapes(req.step_path)
+            gmsh.model.occ.synchronize()
 
-        vols = [t for d, t in gmsh.model.getEntities(3)]
-        if not vols:
-            raise RuntimeError("STEP file contains no 3D solid")
-        # A physical group makes Gmsh write ONLY the solid elements to the
-        # Abaqus/CalculiX deck. Without it Gmsh also writes 1D and 2D elements
-        # (T3D3, CPS6 ...) which CalculiX will reject or silently misuse.
-        gmsh.model.addPhysicalGroup(3, vols, name="SOLID")
+            vols = [t for d, t in gmsh.model.getEntities(3)]
+            if not vols:
+                raise RuntimeError("STEP file contains no 3D solid")
+            # A 3D physical group makes Gmsh write ONLY the solid elements to
+            # the deck. A 2D group would add CPS6 surface elements, which is
+            # why face selections become node sets, not physical groups.
+            gmsh.model.addPhysicalGroup(3, vols, name="SOLID")
+        else:
+            # MEASURED: physical groups survive mesh.clear(), and setOrder(2)
+            # after a clear does not compound. So a retry is a clear plus a
+            # regenerate, not a re-import.
+            gmsh.model.mesh.clear()
 
         bbox, size = _bbox_and_size(req)
         gmsh.option.setNumber("Mesh.MeshSizeMax", size)
@@ -287,7 +307,8 @@ def mesh_step(req: MeshRequest, element: ElementSpec) -> Tuple[MeshQuality, str,
         quality = _measure(bbox, size, vol, area)
         return quality, msh_path, deck_path
     finally:
-        gmsh.finalize()
+        if owns_session:
+            gmsh.finalize()
 
 
 def _measure(bbox, char_size, volume=0.0, area=0.0) -> MeshQuality:
@@ -337,7 +358,8 @@ def _measure(bbox, char_size, volume=0.0, area=0.0) -> MeshQuality:
 # The agent entry point
 # ----------------------------------------------------------------------------
 
-def run_mesh_agent(req: MeshRequest, max_retries: int = 2) -> MeshResult:
+def run_mesh_agent(req: MeshRequest, max_retries: int = 2,
+                   session=None) -> MeshResult:
     """Plan, mesh, measure, check. Retries on quality failure by refining.
 
     The retry loop here fixes MESH QUALITY problems (inverted or badly shaped
@@ -352,7 +374,7 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2) -> MeshResult:
 
     while True:
         attempt += 1
-        quality, msh, deck = mesh_step(req, element)
+        quality, msh, deck = mesh_step(req, element, session=session)
         element.elements_through_thickness = max(
             1, int(math.floor(quality.elements_through_wall)))
 
@@ -406,6 +428,28 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2) -> MeshResult:
                 MIN_ELEMENTS_THROUGH_THICKNESS_BENDING,
                 req.elements_across_min_dim * 2)
             req.target_size = None
+
+    # ---- CAD faces to node sets, AFTER the final mesh -----------------
+    # Node tags are mesh entities. Every retry called mesh.clear(), which
+    # invalidated them. This is the only correct point to extract them, and it
+    # must happen before the oracle deck is copied from the deployment deck.
+    if session is not None and getattr(session, "selections", None):
+        sets = session.extract_node_sets()
+        if session.write_node_sets(deck):
+            notes.append(
+                f"wrote {len(sets)} node set(s) into {deck}: "
+                + ", ".join(f"{k}({len(v)} nodes)" for k, v in sets.items())
+                + ". Face tags survived "
+                + f"{attempt} mesh generation(s) because the CAD model was "
+                  "never re-imported.")
+        else:
+            notes.append(
+                f"selections exist but deck format .{deck.rsplit('.', 1)[-1]} "
+                f"has no NSET writer. Node sets extracted in memory only.")
+    elif session is None:
+        notes.append(
+            "no GeomSession passed. The deck has a solid and no named faces, "
+            "so no load or constraint can be attached to it yet.")
 
     report = check_locking(element, req.material, req.load_case)
 
