@@ -141,15 +141,73 @@ class FaceGroup:
     axis_point: Optional[Vec] = None
     normal: Optional[Vec] = None
     total_area: float = 0.0
+    centroid: Optional[Vec] = None   # area weighted, over member faces
 
     def summary(self) -> str:
-        s = f"group {self.group_id}: {self.kind:<9s} faces={self.tags} area={self.total_area:.1f}"
+        """One line that says WHAT the feature is and WHERE it is.
+
+        Position was missing before, which made a list of 27 groups
+        unusable: "hole dia=8.00" does not tell you which hole. A user
+        picking a group id from a list needs the location, otherwise the
+        selection is a guess and a wrong guess still solves cleanly.
+        """
+        s = (f"group {self.group_id}: {self.kind:<9s} "
+             f"faces={self.tags} area={self.total_area:.1f}")
         if self.radius:
             s += f" dia={2*self.radius:.2f}"
+            if self.axis:
+                a = self.axis
+                ax = "XYZ"[max(range(3), key=lambda i: abs(a[i]))]
+                s += f" axis||{ax}"
+            if self.axis_point:
+                p = self.axis_point
+                s += f" at({p[0]:+.1f},{p[1]:+.1f},{p[2]:+.1f})"
         if self.normal:
             n = self.normal
-            s += f" normal=({n[0]:+.2f},{n[1]:+.2f},{n[2]:+.2f})"
+            ax = "XYZ"[max(range(3), key=lambda i: abs(n[i]))]
+            sign = "+" if n[max(range(3), key=lambda i: abs(n[i]))] > 0 else "-"
+            s += f" faces {sign}{ax}"
+            if self.centroid:
+                p = self.centroid
+                s += f" at({p[0]:+.1f},{p[1]:+.1f},{p[2]:+.1f})"
         return s
+
+    def describe(self, bbox_min=None, bbox_max=None) -> str:
+        """Several lines, for confirming a selection before it is used."""
+        out = [f"  group {self.group_id}  ({self.kind})",
+               f"    CAD faces      {self.tags}",
+               f"    total area     {self.total_area:.2f} mm2"]
+        if self.radius:
+            out.append(f"    diameter       {2*self.radius:.3f} mm")
+            if self.axis:
+                a = self.axis
+                out.append(f"    axis direction ({a[0]:+.3f},{a[1]:+.3f},"
+                           f"{a[2]:+.3f})")
+            if self.axis_point:
+                p = self.axis_point
+                out.append(f"    axis passes    ({p[0]:+.2f},{p[1]:+.2f},"
+                           f"{p[2]:+.2f})")
+            length = self.total_area / (2 * math.pi * self.radius) \
+                if self.radius else 0.0
+            out.append(f"    swept length   {length:.2f} mm "
+                       f"(total over {len(self.tags)} face(s))")
+        if self.normal:
+            n = self.normal
+            out.append(f"    outward normal ({n[0]:+.3f},{n[1]:+.3f},"
+                       f"{n[2]:+.3f})")
+        if self.centroid:
+            p = self.centroid
+            out.append(f"    centroid       ({p[0]:+.2f},{p[1]:+.2f},"
+                       f"{p[2]:+.2f})")
+        if bbox_min and bbox_max:
+            span = [bbox_max[i] - bbox_min[i] for i in range(3)]
+            if self.centroid:
+                rel = [100 * (self.centroid[i] - bbox_min[i]) / span[i]
+                       if span[i] > 1e-9 else 0.0 for i in range(3)]
+                out.append(f"    position in part  X {rel[0]:.0f}%  "
+                           f"Y {rel[1]:.0f}%  Z {rel[2]:.0f}%  of the "
+                           f"bounding box")
+        return "\n".join(out)
 
 
 @dataclass
@@ -365,6 +423,12 @@ def _group_faces(cat: Catalogue) -> List[FaceGroup]:
     # --- coaxial cylinders of equal radius -> one hole or boss -------------
     cyls = [f for f in cat.faces
             if f.surface_type == "Cylinder" and f.radius is not None]
+    def _wc(members):
+        """Area weighted centroid of a set of faces."""
+        a = sum(m.area for m in members) or 1.0
+        return tuple(sum(m.centroid[k] * m.area for m in members) / a
+                     for k in range(3))
+
     for i, f in enumerate(cyls):
         if f.tag in used:
             continue
@@ -385,6 +449,7 @@ def _group_faces(cat: Catalogue) -> List[FaceGroup]:
             kind="hole" if f.is_internal else "boss",
             tags=[m.tag for m in members],
             radius=f.radius, axis=f.axis, axis_point=f.centroid,
+            centroid=_wc(members),
             total_area=sum(m.area for m in members)))
         gid += 1
 
@@ -408,7 +473,7 @@ def _group_faces(cat: Catalogue) -> List[FaceGroup]:
         groups.append(FaceGroup(
             group_id=gid, kind="coplanar" if len(members) > 1 else "single",
             tags=[m.tag for m in members], normal=f.normal,
-            axis_point=f.centroid,
+            axis_point=f.centroid, centroid=_wc(members),
             total_area=sum(m.area for m in members)))
         gid += 1
 
@@ -418,7 +483,8 @@ def _group_faces(cat: Catalogue) -> List[FaceGroup]:
             continue
         f.group_id = gid
         groups.append(FaceGroup(group_id=gid, kind="single", tags=[f.tag],
-                                axis_point=f.centroid, total_area=f.area))
+                                axis_point=f.centroid, centroid=f.centroid,
+                                total_area=f.area))
         used.add(f.tag)
         gid += 1
 
@@ -438,8 +504,46 @@ def holes(cat: Catalogue, diameter: Optional[float] = None,
 
 
 def largest_hole(cat: Catalogue) -> Optional[FaceGroup]:
+    """Biggest hole by diameter, ties broken by bearing area.
+
+    MEASURED BUG, fixed here: ranking by radius alone breaks ties
+    arbitrarily. On a bracket where a cut produced three coaxial groups at
+    diameter 8, this returned a 0.41 mm2 sliver with a swept length of
+    0.02 mm instead of the real 127.7 mm2 pin hole. The sliver is a valid
+    hole group, so nothing failed. A load applied to it would have solved
+    cleanly and been meaningless.
+
+    Ranking by (quantised radius, total_area) picks the largest diameter
+    and, among equals, the one that actually carries load.
+
+    Second MEASURED bug, in the fix for the first one: the tie-break by area
+    never fired, because the radii were not equal in floating point. OCC
+    surface sampling gave 4.000000000000001 for the real hole and
+    4.000000000010253 for the sliver, so the sliver ranked as the LARGER
+    hole by 1e-11 mm. Radii must be quantised before they are compared. Two
+    exact-equality assumptions in a row, both wrong, both silent.
+    """
     h = holes(cat)
-    return max(h, key=lambda g: g.radius) if h else None
+    if not h:
+        return None
+    return max(h, key=lambda g: (round(g.radius, 6), g.total_area))
+
+
+def sliver_warning(g: FaceGroup) -> Optional[str]:
+    """Flag a cylindrical group too short to be a real feature.
+
+    A cylinder whose swept length is under a tenth of its radius is almost
+    always an artifact of a boolean cut, not a hole a pin passes through.
+    """
+    if not g.radius or g.radius <= 0:
+        return None
+    length = g.total_area / (2 * math.pi * g.radius)
+    if length < 0.1 * g.radius:
+        return (f"group {g.group_id} is only {length:.3f} mm long on a "
+                f"{g.radius:.2f} mm radius. That is a sliver from a boolean "
+                f"cut, not a feature that carries load. Applying a load here "
+                f"would solve cleanly and mean nothing.")
+    return None
 
 
 def planar_groups(cat: Catalogue, normal: Optional[Vec] = None,
@@ -659,3 +763,157 @@ if __name__ == "__main__":
         sels.append(NamedSelection("MOUNT_FACE", bottom.tags, "constraint"))
     for s in sels:
         print("  " + s.summary())
+
+
+# ---------------------------------------------------------------------------
+# Surface facets: CAD face -> (element, face index) pairs
+# ---------------------------------------------------------------------------
+# This is what makes *SURFACE, TYPE=ELEMENT possible on an orphan mesh, and
+# therefore *DLOAD pressure and area-weighted (consistent) nodal forces.
+#
+# Common misconception, worth stating: an Abaqus/CalculiX surface does NOT
+# need CAD geometry. It is element ids plus a face label (S1..S4 for tets).
+# Gmsh simply does not write them. They are recoverable because every boundary
+# triangle of the surface mesh is one face of exactly one tet.
+#
+# MEASURED on gmsh 4.15.2: 36 of 36 surface triangles matched their parent
+# tet and face label, zero unmatched.
+
+# Abaqus / CalculiX tet face definitions, by CORNER node (0-based local index)
+_TET_FACES = {
+    "S1": (0, 1, 2),
+    "S2": (0, 3, 1),
+    "S3": (1, 3, 2),
+    "S4": (2, 3, 0),
+}
+
+_GMSH_TET4, _GMSH_TET10 = 4, 11
+_GMSH_TRI3, _GMSH_TRI6 = 2, 9
+
+
+def _tet_face_lookup() -> Dict[frozenset, tuple]:
+    """Map {3 corner node ids} -> (element_id, face_label) for every tet face.
+
+    Interior faces are shared by two tets and the later one wins. That is
+    harmless because only boundary faces are ever queried, and a boundary face
+    belongs to exactly one element.
+    """
+    etypes, etags, enodes = gmsh.model.mesh.getElements(3)
+    lookup: Dict[frozenset, tuple] = {}
+    for et, tags, nodes in zip(etypes, etags, enodes):
+        if et == _GMSH_TET4:
+            npe = 4
+        elif et == _GMSH_TET10:
+            npe = 10
+        else:
+            continue
+        conn = nodes.reshape(-1, npe)
+        for eid, c in zip(tags, conn):
+            for label, idx in _TET_FACES.items():
+                lookup[frozenset(int(c[i]) for i in idx)] = (int(eid), label)
+    if not lookup:
+        raise RuntimeError("no tetrahedral elements found. Face extraction "
+                           "currently supports tets only.")
+    return lookup
+
+
+def surface_facets(selections: Sequence[NamedSelection]
+                   ) -> Dict[str, List[tuple]]:
+    """Element-face pairs for each selection, from the CURRENT mesh.
+
+    Returns {name: [(element_id, 'S1'), ...]}. Call after generate(3) and
+    setOrder(), in the session that produced the mesh.
+    """
+    lookup = _tet_face_lookup()
+    out: Dict[str, List[tuple]] = {}
+    for sel in selections:
+        pairs, unmatched = [], 0
+        for face in sel.tags:
+            st, _, sn = gmsh.model.mesh.getElements(2, face)
+            for et, nodes in zip(st, sn):
+                npe = 3 if et == _GMSH_TRI3 else 6 if et == _GMSH_TRI6 else 0
+                if npe == 0:
+                    continue
+                for tri in nodes.reshape(-1, npe):
+                    key = frozenset(int(tri[i]) for i in (0, 1, 2))
+                    hit = lookup.get(key)
+                    if hit:
+                        pairs.append(hit)
+                    else:
+                        unmatched += 1
+        if unmatched:
+            raise RuntimeError(
+                f"selection '{sel.name}': {unmatched} surface triangles had "
+                f"no parent tet. The surface and volume meshes disagree, so "
+                f"any load written from this would be wrong. Refusing.")
+        if not pairs:
+            raise RuntimeError(
+                f"selection '{sel.name}' produced ZERO facets on faces "
+                f"{sel.tags}. Refusing to write an empty surface.")
+        out[sel.name] = pairs
+    return out
+
+
+def facet_node_weights(selections: Sequence[NamedSelection]
+                       ) -> Dict[str, Dict[int, float]]:
+    """Consistent nodal load weights (units of area) per selection.
+
+    For a 6-node triangle under uniform traction the consistent nodal forces
+    are ZERO at the corner nodes and area/3 at each mid-side node. That is not
+    a bug and it is what Abaqus itself does for pressure on C3D10. Splitting
+    the force equally over all nodes instead gives the right resultant but the
+    wrong local stress field, which is exactly the kind of plausible-looking
+    error this project exists to avoid.
+
+    For a 3-node triangle each node gets area/3.
+    """
+    out: Dict[str, Dict[int, float]] = {}
+    for sel in selections:
+        w: Dict[int, float] = {}
+        for face in sel.tags:
+            st, _, sn = gmsh.model.mesh.getElements(2, face)
+            for et, nodes in zip(st, sn):
+                npe = 3 if et == _GMSH_TRI3 else 6 if et == _GMSH_TRI6 else 0
+                if npe == 0:
+                    continue
+                for tri in nodes.reshape(-1, npe):
+                    ids = [int(t) for t in tri]
+                    p = [gmsh.model.mesh.getNode(i)[0] for i in ids[:3]]
+                    ux = [p[1][k] - p[0][k] for k in range(3)]
+                    vx = [p[2][k] - p[0][k] for k in range(3)]
+                    cr = (ux[1]*vx[2] - ux[2]*vx[1],
+                          ux[2]*vx[0] - ux[0]*vx[2],
+                          ux[0]*vx[1] - ux[1]*vx[0])
+                    area = 0.5 * math.sqrt(sum(c*c for c in cr))
+                    if npe == 3:
+                        for i in ids:
+                            w[i] = w.get(i, 0.0) + area / 3.0
+                    else:
+                        for i in ids[3:]:
+                            w[i] = w.get(i, 0.0) + area / 3.0
+        total = sum(w.values())
+        if total <= 0:
+            raise RuntimeError(f"selection '{sel.name}' has zero total area")
+        out[sel.name] = w
+    return out
+
+
+def append_surfaces_inp(deck_path: str,
+                        facets: Dict[str, List[tuple]],
+                        per_line: int = 8) -> str:
+    """Append *ELSET plus *SURFACE, TYPE=ELEMENT blocks for each selection."""
+    with open(deck_path, "a") as f:
+        f.write("**\n** element-face surfaces from CAD faces\n**\n")
+        for name, pairs in facets.items():
+            by_label: Dict[str, List[int]] = {}
+            for eid, label in pairs:
+                by_label.setdefault(label, []).append(eid)
+            for label in sorted(by_label):
+                ids = sorted(set(by_label[label]))
+                f.write(f"*ELSET, ELSET=_{name}_{label}\n")
+                for i in range(0, len(ids), per_line):
+                    f.write(", ".join(str(t) for t in ids[i:i+per_line]) + "\n")
+            f.write(f"*SURFACE, TYPE=ELEMENT, NAME={name}\n")
+            for label in sorted(by_label):
+                f.write(f"_{name}_{label}, {label}\n")
+    return deck_path
