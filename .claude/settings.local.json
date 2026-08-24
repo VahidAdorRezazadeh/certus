@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import gmsh; print\\(gmsh.__version__\\)\")",
+      "PowerShell(py --version)",
+      "PowerShell(python --version)",
+      "PowerShell(& \"C:\\\\Program Files\\\\ParaView 5.13.2\\\\bin\\\\Lib\\\\venv\\\\scripts\\\\nt\\\\python.exe\" -c \"import sys; print\\(sys.version\\)\" 2>&1)",
+      "PowerShell(& \"C:\\\\SIMULIA\\\\EstProducts\\\\2024\\\\win_b64\\\\tools\\\\SMApy\\\\python3.10\\\\python.exe\" -c \"import sys; print\\(sys.version\\)\" 2>&1)",
+      "Bash(\"/c/Users/vahid.rezazadeh/AppData/Local/anaconda3/envs/certus/python.exe\" -c \"import gmsh; print\\('gmsh OK', gmsh.__file__\\)\")"
+    ]
+  }
+}
