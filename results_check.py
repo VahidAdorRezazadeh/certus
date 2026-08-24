@@ -27,38 +27,11 @@ implemented here, so an Abaqus run must be compared by hand until it is.
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
+import re
 import sys
 
 
-def read_frd_disp(path: str) -> Dict[int, Tuple[float, float, float]]:
-    """Node displacements from a CalculiX .frd file.
-
-    The format is fixed width blocks. A displacement block is announced by a
-    line containing DISP, and the data lines that follow start with ' -1'.
-    """
-    disp: Dict[int, Tuple[float, float, float]] = {}
-    in_disp = False
-    with open(path) as f:
-        for line in f:
-            if "DISP" in line and line.strip().startswith("-4"):
-                in_disp = True
-                continue
-            if not in_disp:
-                continue
-            if line.startswith(" -3"):
-                break
-            if line.startswith(" -1"):
-                try:
-                    nid = int(line[3:13])
-                    ux = float(line[13:25])
-                    uy = float(line[25:37])
-                    uz = float(line[37:49])
-                    disp[nid] = (ux, uy, uz)
-                except ValueError:
-                    continue
-    if not disp:
-        raise RuntimeError(f"no displacement block found in {path}")
-    return disp
+from frdread import read_frd_disp  # width-detecting .frd reader, shared so there is one copy
 
 
 @dataclass
