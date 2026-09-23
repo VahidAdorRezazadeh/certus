@@ -995,28 +995,35 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
             print(f"[warn] drawing failed: {type(e).__name__}: {e}")
         last["drawing"] = drawing
 
-        if visual and drawing and k < attempts:
-            print("[visual] cross-checking the drawing against the request...")
+        # Visual review by an LLM. ADVISORY ONLY: it can never overturn the
+        # measured verdict. It used to: a match=false answer discarded a part
+        # that had passed every deterministic check and regenerated it, which
+        # made an LLM the judge of geometry and broke the rule that physics
+        # and verdicts are computed, never generated. Its discrepancies are
+        # now written to the report for a human to read, and nothing else.
+        vis_note = ""
+        if visual and drawing:
+            print("[visual] advisory LLM review of the drawing (cannot change "
+                  "the verdict)...")
             try:
                 vis = call_llm_visual(request, drawing, image_path)
                 last["visual"] = vis
                 if vis.get("match") is False:
-                    print("[visual] MISMATCH reported: "
-                          + "; ".join(vis.get("discrepancies") or []))
-                    feedback = ("The measured checks passed but a visual review of the "
-                                "generated part reported a mismatch.\nDiscrepancies:\n"
+                    vis_note = ("\nADVISORY VISUAL REVIEW (LLM, not a check, "
+                                "did not change the verdict):\n"
                                 + "\n".join("  - " + d for d in
                                             (vis.get("discrepancies") or []))
-                                + "\nFix instructions: "
-                                + str(vis.get("fix_instructions", "")))
-                    continue
-                print("[visual] no mismatch reported (advisory only)")
+                                + "\n  Confirm by measurement before acting.\n")
+                    print("[visual] advisory discrepancies noted in the report: "
+                          + "; ".join(vis.get("discrepancies") or []))
+                else:
+                    print("[visual] advisory review reported no discrepancy")
             except Exception as e:
                 print(f"[visual] skipped: {type(e).__name__}: {e}")
 
         with open(OUT_RPT, "w") as f:
             f.write(f"REQUEST: {request}\n\nSPEC:\n{json.dumps(spec, indent=2)}\n\n"
-                    f"VERDICT: {v}\n{report_text(results)}\n")
+                    f"VERDICT: {v}\n{report_text(results)}\n{vis_note}")
         last["run_dir"] = archive_cad_run(request, spec, results, v, meas,
                                           drawing, history, image_path)
         return last
