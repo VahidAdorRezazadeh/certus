@@ -442,6 +442,32 @@ def run(step_path: str,
             rd.warn(f"solve failed: {info}")
             headline = f"SOLVE FAILED: {info}"
 
+    # ---- unresolved physics findings must reach the headline -----------
+    # A run that computed a MODERATE or worse locking finding, never cleared
+    # it, and then published "SOLVED" is asserting a confidence it did not
+    # earn. The numbers may still be useful, but the headline must carry the
+    # qualification, and run.json must carry it in machine readable form so a
+    # benchmark table can aggregate it.
+    unresolved = []
+    try:
+        unresolved = lreport.actionable() if lreport else []
+    except NameError:
+        unresolved = []
+    if unresolved:
+        ids = ", ".join(f"{f.rule_id} {f.severity.value}" for f in unresolved)
+        if headline.startswith("SOLVED"):
+            headline = (f"SOLVED, RESULT NOT TRUSTWORTHY. Unresolved physics "
+                        f"finding(s): {ids}")
+        rd.warn(f"The locking check reported {ids} and it was never cleared. "
+                f"Every number in this run carries that bias.")
+        rd.action(f"Resolve {ids} before quoting any number from this run. "
+                  f"See the cure availability table above: a cure that no "
+                  f"available solver offers is a stack decision, not a fix.")
+    rd.set("unresolved_findings",
+           [{"rule": f.rule_id, "severity": f.severity.value}
+            for f in unresolved])
+    rd.set("result_trustworthy", not unresolved)
+
     rd.set("headline_verdict", headline)
     if not solve_with:
         rd.action(f"Submit case_abaqus/case.inp in Abaqus, or run "

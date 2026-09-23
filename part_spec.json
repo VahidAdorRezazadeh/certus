@@ -1,0 +1,45 @@
+{
+  "part_name": "Pin bracket with dual lugs",
+  "tolerance_mm": 0.5,
+  "overall_mm": {
+    "x": 63.4,
+    "y": 50.7,
+    "z": 33.04
+  },
+  "solid_count": 1,
+  "min_face_count": 30,
+  "bbox_fill_range": [
+    0.1,
+    0.2
+  ],
+  "holes": [
+    {
+      "diameter_mm": 5.0,
+      "axis": "z",
+      "count": 4,
+      "through": true
+    },
+    {
+      "diameter_mm": 8.0,
+      "axis": "x",
+      "count": 1,
+      "through": true
+    }
+  ],
+  "target_volume_mm3": 12994.0,
+  "features": [
+    "Base plate 63.4x50.7x2.54 with R8 rounded corners",
+    "Four Z-axis through holes diameter 5, inset 5.5mm from both edges near each corner",
+    "Two parallel thin lugs (5mm thick in X), 12mm gap, symmetric about X=0",
+    "Each lug profile: rectangular 20mm wide in Y rising from Z=2.54, topped by semicircular arc R10 centered at Z=23.04",
+    "Single pin hole diameter 8 along X axis through both lugs, centered at Y=0, Z=23.04",
+    "Fillet R3 at lug-to-plate root intersection"
+  ],
+  "assumptions": [
+    "Assumed plate thickness 2.54mm applies uniformly across full plate including rounded corners",
+    "Assumed the two lug holes, being colinear and coaxial with a gap between lugs, count as a single hole per the clevis rule",
+    "Assumed fillet at lug root (R3) has negligible effect on volume estimate",
+    "Assumed hole inset of 5.5mm is measured from plate edges (not rounded corner arc) for hole center placement",
+    "Assumed uniform wall thickness and no additional undocumented features (e.g., chamfers)"
+  ]
+}

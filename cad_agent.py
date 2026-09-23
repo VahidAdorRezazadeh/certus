@@ -45,7 +45,14 @@ VISUAL_CHECK = os.environ.get("CAD_AGENT_VISUAL", "1") == "1"
 # A model that thinks before answering can spend its whole budget on thinking and
 # emit no text. That produced five identical empty replies in testing, so the code
 # budget is generous by default.
-CODE_MAX_TOKENS = int(os.environ.get("CAD_AGENT_CODE_TOKENS", "8000"))
+# Floored, so a stale value left in the shell environment cannot reintroduce
+# the empty-reply failure.
+CODE_MAX_TOKENS = max(24000, int(os.environ.get("CAD_AGENT_CODE_TOKENS", "24000")))
+# The SDK refuses a NON-streaming request whose token budget could take over ten
+# minutes, so every call streams. Measured, not assumed: claude-sonnet-5 thinks
+# by default, and _ask_raw keeps only blocks of type "text", so the thinking
+# tokens are spent and discarded. At 8000 the budget was exhausted before the
+# code was emitted and the reply came back empty three times.
 
 OUT_STEP = "part.step"
 OUT_STL  = "part.stl"
@@ -112,6 +119,44 @@ Rules:
 - If you are given a FAILED CHECKS report, the previous solid was measured and
   rejected. Change the geometry so those measurements change. Do not just re-emit
   the same construction with cosmetic edits.
+
+BUILD123D RULES THAT HAVE CAUSED REAL FAILURES. Follow them.
+
+Fillets. fillet(edges, r) fails the WHOLE operation if any single edge in the
+list cannot take radius r, and the error message names only the radius, not the
+offending edge. So:
+  - Never pass a broad selection such as part.edges() or a filter that only
+    tests one coordinate. Filter on every coordinate that distinguishes the
+    edges you want, and nothing else.
+  - Select by edge centre, e.g.
+        roots = [e for e in part.edges()
+                 if abs(e.center().Z - PLATE_T) < 1e-6
+                 and abs(e.center().X) < LUG_OUTER + 1e-6
+                 and abs(e.center().Y) <= LUG_W / 2 + 1e-6]
+        part = fillet(roots, ROOT_R)
+    The Z test alone would also catch the plate rim, which cannot take the
+    radius, and the whole fillet then fails.
+  - Apply fillets BEFORE cutting holes. A fillet run over an edge created by a
+    hole is a different, usually invalid, operation.
+  - If a previous attempt raised "Failed creating a fillet with radius of R",
+    do NOT lower the radius: the specification asked for R. Narrow the edge
+    selection instead.
+
+Vertices of an edge are `e @ 0` and `e @ 1`, and they are vectors, so compare
+components: abs((e @ 0).X - (e @ 1).X) < 1e-6. `abs(vector)` is not a vector.
+
+Construction. Prefer explicit algebra over builder context managers:
+    part = plate + lug_a + lug_b
+    part = part - hole
+Every feature named in the specification must appear in the final `part`. A
+solid that builds cleanly but is missing a feature passes no measurement and
+wastes an attempt.
+
+Positioning. Pos(x, y, z) * solid translates, Rot(rx, ry, rz) * solid rotates.
+Box(..., align=(Align.CENTER, Align.CENTER, Align.MIN)) sits on Z=0.
+To make a through hole on the X axis:
+    Pos(0, 0, Z) * Rot(0, 90, 0) * Cylinder(D / 2, LONGER_THAN_THE_PART)
+
 Return only raw code: no markdown fences, no prose."""
 
 VISION_SYSTEM = """You compare a generated CAD part against what was asked for.
@@ -255,9 +300,10 @@ def _ask_raw(system: str, content: list, max_tokens: int = 2000):
     was cut off, which can leave the text empty if the budget was spent before
     any text was emitted."""
     from anthropic import Anthropic
-    msg = Anthropic().messages.create(
-        model=MODEL, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": content}])
+    with Anthropic().messages.stream(
+            model=MODEL, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": content}]) as stream:
+        msg = stream.get_final_message()
     text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     return strip_fences(text), getattr(msg, "stop_reason", None)
 
@@ -328,8 +374,9 @@ def call_llm_code(request: str, spec: dict, prior_code: str | None = None,
                         f"\n\nPrevious attempt was REJECTED.\n{feedback}\n\n"
                         f"Previous code:\n{prior_code}\n\nReturn corrected code only."})
 
+    budget = CODE_MAX_TOKENS
     for shot in range(1, 4):
-        code, stop = _ask_raw(CODE_SYSTEM, content, max_tokens=CODE_MAX_TOKENS)
+        code, stop = _ask_raw(CODE_SYSTEM, content, max_tokens=budget)
         if code.strip() and "part" in code:
             if stop == "max_tokens":
                 print("[code] warning: reply hit the token limit and may be truncated. "
@@ -340,8 +387,9 @@ def call_llm_code(request: str, spec: dict, prior_code: str | None = None,
               + (f"{len(code)} chars with no 'part'" if code.strip() else "NO TEXT AT ALL")
               + f" (stop_reason={stop}). Saved to {OUT_CODE_RAW}.")
         if stop == "max_tokens":
+            budget = min(budget * 2, 64000)
             print("[code] the token budget was exhausted before any code was emitted. "
-                  f"Retrying with a larger budget.")
+                  f"Retrying with max_tokens={budget}.")
         content = content + [{"type": "text", "text":
             "Your previous reply contained no usable code. Emit the build123d code "
             "immediately with no preamble and no explanation. The final statement "
@@ -791,6 +839,97 @@ def render_drawing(stl_path=OUT_STL, png_path=OUT_PNG, part_name="PART",
 
 
 # ----------------------------------------------------------------------
+# RUN ARCHIVE
+# ----------------------------------------------------------------------
+# Same folder convention and the same REPORT.txt shape as model_agent.py, so a
+# CAD run and a solve run read alike and aggregate alike. run_dir.RunDir is
+# reused rather than reimplemented: one formatter, no drift. The subdirectories
+# map cleanly onto what the CAD stage produces, so none is left empty.
+#     geometry/  part.step
+#     mesh/      part.stl (display), part_export.stl (fine)
+#     results/   part_views.png, part_spec.json, part_verification.txt
+
+def archive_cad_run(request, spec, results, verdict_text, meas, drawing,
+                    history, image_path=None, run_root="runs"):
+    """Copy this run's artifacts into runs/<stamp>_cad_<label>/ and write the
+    report. Returns the folder path, or None if run_dir.py is not importable."""
+    try:
+        from run_dir import RunDir
+    except Exception as e:
+        print(f"[runs] not archived, run_dir.py unavailable: {e}")
+        return None
+
+    name = str((spec or {}).get("part_name", "part")).strip() or "part"
+    rd = RunDir(f"cad_{name}", root=run_root, solvers=(),
+                meta={"stage": "cad", "request": request,
+                      "reference_image": image_path or "none"})
+
+    for src, kind in ((OUT_STEP, "geometry"), (OUT_STL, "mesh"),
+                      (OUT_MESH, "mesh"), (drawing, "results"),
+                      (OUT_SPEC, "results"), (OUT_RPT, "results")):
+        if src and os.path.exists(src):
+            rd.adopt(src, kind)
+
+    rd.set("headline_verdict",
+           f"{verdict_text}. Geometry MEASURED from the built solid and "
+           f"compared to the approved specification.")
+    rd.set("verdict", verdict_text)
+    rd.set("step", OUT_STEP)
+
+    rd.section("REQUEST, AS TYPED", request)
+
+    if spec:
+        rd.section("SPECIFICATION THE MODEL PROPOSED",
+                   json.dumps(spec, indent=2))
+        if spec.get("assumptions"):
+            rd.section("ASSUMPTIONS THE MODEL MADE, APPROVED BY THE USER",
+                       "\n".join("  - " + str(a) for a in spec["assumptions"]))
+
+    if meas:
+        bb = meas.get("bbox") or {}
+        bx, by, bz = (float(bb.get(k, float("nan"))) for k in ("x", "y", "z"))
+        rd.section("WHAT WAS MEASURED ON THE BUILT SOLID",
+                   f"  bounding box   {bx:.3f} x {by:.3f} x {bz:.3f} mm\n"
+                   f"  volume         {meas.get('volume', float('nan')):.1f} mm3\n"
+                   f"  bbox fill      {meas.get('bbox_fill', float('nan')):.4f}\n"
+                   f"  faces          {meas.get('n_faces', '?')}\n"
+                   f"  solids         {meas.get('n_solids', '?')}\n"
+                   f"  BREP valid     {meas.get('valid', '?')}\n"
+                   f"  hole groups    {len(meas.get('holes', []))}\n"
+                   f"  fillets        {len(meas.get('concave_fillets', []))}")
+        rd.set("measured", {k: meas.get(k) for k in
+                            ("bbox", "volume", "bbox_fill", "n_faces",
+                             "n_solids", "valid")})
+
+    if results:
+        rd.section("VERIFICATION AGAINST THE SPECIFICATION",
+                   report_text(results))
+        failed = [r for r in results if r.get("status") != "PASS"]
+        for r in failed:
+            rd.warn(f"[{r['status']}] {r['name']}: {r.get('detail', '')}")
+        rd.set("checks_total", len(results))
+        rd.set("checks_failed", len(failed))
+        rd.set("geometry_trustworthy", not failed)
+        if failed:
+            rd.action("Do not use this STEP downstream. A failed geometric "
+                      "check means the solid is not the part that was "
+                      "specified, whether or not it built without error.")
+
+    if history:
+        rd.section("ATTEMPT HISTORY", "\n".join(history))
+
+    rd.action("The specification and the code came from the same model, so "
+              "these checks catch a model that built something other than "
+              "what it specified. They do not catch a model that specified "
+              "the wrong part. That is what the approval gate is for.")
+
+    path = rd.write_report()
+    print(f"\n--> run folder  {rd.path}")
+    print(f"--> report      {path}")
+    return rd.path
+
+
+# ----------------------------------------------------------------------
 # AGENT LOOP
 # ----------------------------------------------------------------------
 def generate(request: str, image_path: str | None = None, spec: dict | None = None,
@@ -819,6 +958,7 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
             print("[spec] reloaded")
 
     code, feedback, last = None, None, {}
+    history = []
     for k in range(1, attempts + 1):
         print(f"\n[attempt {k}/{attempts}] generating code...")
         code = call_llm_code(request, spec, code, feedback, image_path)
@@ -827,12 +967,16 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
         if not ok or meas is None:
             print(f"[attempt {k}] BUILD FAILED")
             print(log[-700:])
+            history.append(f"  attempt {k}: BUILD FAILED. "
+                           + (log.strip().splitlines() or ["no output"])[-1][:160])
             feedback = "The code did not run. Error output:\n" + log[-2500:]
             continue
 
         results = check_spec(spec, meas)
         v, hard, soft = verdict(results)
         print(f"[attempt {k}] built OK. VERIFICATION: {v}")
+        history.append(f"  attempt {k}: built OK, verification {v}"
+                       + (f", {len(hard)} critical check(s) failed" if hard else ""))
         print(report_text(results))
         last = dict(code=code, step=out_step, stl=out_stl, mesh=OUT_MESH, meas=meas,
                     results=results, verdict=v, spec=spec)
@@ -873,6 +1017,8 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
         with open(OUT_RPT, "w") as f:
             f.write(f"REQUEST: {request}\n\nSPEC:\n{json.dumps(spec, indent=2)}\n\n"
                     f"VERDICT: {v}\n{report_text(results)}\n")
+        last["run_dir"] = archive_cad_run(request, spec, results, v, meas,
+                                          drawing, history, image_path)
         return last
 
     print("\n[result] attempts exhausted without a passing verification.")
@@ -887,6 +1033,9 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
                 results=last["results"])
         except Exception:
             pass
+        last["run_dir"] = archive_cad_run(
+            request, spec, last["results"], last["verdict"], last["meas"],
+            last.get("drawing"), history, image_path)
         return last
     raise RuntimeError("no buildable geometry produced")
 
@@ -951,6 +1100,8 @@ def build_file(py_path: str, spec_path: str | None = None):
     if not ok or meas is None:
         return 1
     spec = json.load(open(spec_path)) if spec_path else None
+    if spec:
+        json.dump(spec, open(OUT_SPEC, "w"), indent=2)
     results = check_spec(spec, meas) if spec else None
     if results:
         v = verdict(results)[0]
@@ -961,6 +1112,14 @@ def build_file(py_path: str, spec_path: str | None = None):
                          request=f"built from {os.path.basename(py_path)}",
                          meta=dict(volume=meas["volume"]), results=results)
     print(f"--> STEP {OUT_STEP}\n--> STL (fine) {OUT_MESH}\n--> drawing {png}")
+    if results:
+        with open(OUT_RPT, "w") as f:
+            f.write(f"REQUEST: built from {os.path.basename(py_path)}\n\n"
+                    f"SPEC:\n{json.dumps(spec, indent=2)}\n\n"
+                    f"VERDICT: {v}\n{report_text(results)}\n")
+        archive_cad_run(f"built from {os.path.basename(py_path)} (offline, no "
+                        f"model call)", spec, results, v, meas, png,
+                        ["  offline build, one pass, no repair loop"])
     return 0
 
 
