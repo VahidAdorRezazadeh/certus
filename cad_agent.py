@@ -99,7 +99,8 @@ Rules:
   and record the reason in "assumptions". Never invent a number silently.
 - min_face_count: a plain box has 6 faces. Estimate the real count and set a
   lower bound that a featureless plate would fail.
-- bbox_fill_range: plausible range for part volume divided by bounding box
+- bbox_fill_range: ONLY if the user states it; otherwise null. If you fill it,
+  also set "bbox_fill_range_source": "user". Never estimate it:
   volume. A solid block is 1.0. A bracket or ribbed part is typically 0.1 to 0.6.
 - holes: only actual holes (material removed). Do NOT list outer rounds, bosses
   or fillets. A single hole bored along one axis through several walls, such as a
@@ -498,11 +499,19 @@ def check_spec(spec: dict, m: dict) -> list:
         out.append(_res(f"overall_{ax}", abs(got - float(want)) <= tol,
                         f"{ax.upper()} = {got:.2f} mm, target {float(want):.2f} +/- {tol:g}"))
 
-    rng = spec.get("bbox_fill_range") or [0.03, 0.97]
+    # The fill band is only a check when the USER stated it. A band the spec
+    # model proposed is an invented number: on the reference bracket it
+    # proposed 0.15 to 0.45 against a true 0.124, which fails a correct part.
+    # Unstated, the band is the physical one: a solid fills more than 0 and
+    # less than 1 of its box, and the check is reported, not critical.
+    stated = spec.get("bbox_fill_range_source") == "user"
+    rng = spec.get("bbox_fill_range") if stated else [0.03, 0.97]
     lo, hi = float(rng[0]), float(rng[1])
     out.append(_res("bbox_fill", lo <= m["bbox_fill"] <= hi,
                     f"volume / bbox volume = {m['bbox_fill']:.3f}, expected "
-                    f"{lo:g} to {hi:g}", critical=False))
+                    f"{lo:g} to {hi:g} "
+                    f"({'stated by the user' if stated else 'physical bounds; no band was stated'})",
+                    critical=False))
 
     mf = spec.get("min_face_count")
     if mf:
@@ -874,6 +883,11 @@ def archive_cad_run(request, spec, results, verdict_text, meas, drawing,
            f"{verdict_text}. Geometry MEASURED from the built solid and "
            f"compared to the approved specification.")
     rd.set("verdict", verdict_text)
+    rd.set("llm_roles", ["the specification was proposed by a language model "
+                         "and approved by the user",
+                         "the CAD code was written by a language model; the "
+                         "verdict comes from measuring the built solid",
+                         "an optional visual review is advisory only"])
     rd.set("step", OUT_STEP)
 
     rd.section("REQUEST, AS TYPED", request)

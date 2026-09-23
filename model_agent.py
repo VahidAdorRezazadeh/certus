@@ -103,28 +103,34 @@ ALL_SOLVERS = ("abaqus", "calculix")
 # ---------------------------------------------------------------------------
 
 def _pick(prompt: str, options: Sequence[str], default: int = 0) -> str:
+    """Numbered from 1. Enter takes the default. A wrong entry is asked
+    again, never silently replaced by the default: the old menu turned a
+    typo into a different load direction without saying so."""
     print(f"\n{prompt}")
-    for i, o in enumerate(options):
-        print(f"  [{i}] {o}" + ("  (default)" if i == default else ""))
-    raw = input("  choice: ").strip()
-    if not raw:
-        return options[default]
-    try:
-        return options[int(raw)]
-    except (ValueError, IndexError):
-        print("  not a listed option, using the default")
-        return options[default]
+    for i, o in enumerate(options, 1):
+        print(f"  [{i}] {o}" + ("  (default)" if i - 1 == default else ""))
+    for _ in range(3):
+        raw = input("  choice: ").strip()
+        if not raw:
+            return options[default]
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return options[int(raw) - 1]
+        print(f"  '{raw}' is not 1 to {len(options)}. Try again.")
+    raise SystemExit("no valid choice after 3 tries; nothing was run")
 
 
 def _number(prompt: str, default: float) -> float:
-    raw = input(f"{prompt} [{default}]: ").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        print(f"  not a number, using {default}")
-        return default
+    """Enter takes the default. A non-number is asked again, never replaced
+    by the default: a typo in a load magnitude must not become 100 N."""
+    for _ in range(3):
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            print(f"  '{raw}' is not a number. Try again.")
+    raise SystemExit("no valid number after 3 tries; nothing was run")
 
 
 def _fmt_groups(cat, groups) -> None:
@@ -742,7 +748,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("step", nargs="?")
     ap.add_argument("--cantilever", action="store_true")
-    ap.add_argument("--solvers", default="abaqus,calculix")
+    ap.add_argument("--solvers", default=None,
+                    help="comma list; on the STEP path it replaces the "
+                         "solver question")
     ap.add_argument("--solve", default=None,
                     help="run this solver here (calculix only)")
     ap.add_argument("--converge", default=None,
@@ -751,7 +759,8 @@ def main():
     ap.add_argument("--nlgeom", action="store_true")
     ap.add_argument("--runs", default="runs")
     a = ap.parse_args()
-    solvers = tuple(s.strip() for s in a.solvers.split(",") if s.strip())
+    solvers = tuple(s.strip() for s in (a.solvers or "abaqus,calculix")
+                    .split(",") if s.strip())
     conv = [float(x) for x in a.converge.split(",")] if a.converge else None
 
     if a.cantilever:
@@ -820,11 +829,18 @@ def main():
             str(1 + max(range(3), key=lambda i: abs(vec[i])))]
          if load_kind == "force" else (1, 2, 3))
 
-    sv = _pick("Which solver do you want decks for?",
-               ["both abaqus and calculix", "abaqus only", "calculix only"], 0)
-    solvers = {"both abaqus and calculix": ("abaqus", "calculix"),
-               "abaqus only": ("abaqus",),
-               "calculix only": ("calculix",)}[sv]
+    if a.solvers is None:
+        sv = _pick("Which solver do you want decks for?",
+                   ["both abaqus and calculix", "abaqus only",
+                    "calculix only"], 0)
+        solvers = {"both abaqus and calculix": ("abaqus", "calculix"),
+                   "abaqus only": ("abaqus",),
+                   "calculix only": ("calculix",)}[sv]
+    else:
+        print(f"\nsolvers from --solvers: {', '.join(solvers)}")
+    if a.solve and a.solve not in solvers:
+        raise SystemExit(f"--solve {a.solve} needs a {a.solve} deck, but the "
+                         f"solvers are {solvers}")
 
     print("\n" + "=" * 70)
     print("EVERYTHING BELOW IS COMPUTED, NOT ASKED:")

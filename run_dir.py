@@ -145,11 +145,19 @@ class RunDir:
             or ["  nothing outstanding"]
         out.append("")
 
+        roles = self.meta.get("llm_roles") or []
         out += [f"{n+3}. FILES", "-" * w, self._file_tree(), "", W,
-                "  Every number above was produced by deterministic code. No "
-                "language model",
-                "  chose an element type, a mesh size, a deformation mode or "
-                "a verdict.", W]
+                "  WHERE THE NUMBERS CAME FROM",
+                "  Computed by deterministic code or the solver: element "
+                "type, mesh size,",
+                "  deformation mode, every check and its verdict, and every "
+                "result number.",
+                "  Not computed here, taken as given: the geometry file, the "
+                "face choices,",
+                "  the material and the load, which are only as right as "
+                "their source.",
+                "  Language model use in this run: "
+                + ("; ".join(roles) if roles else "none") + ".", W]
 
         text = "\n".join(out)
         path = os.path.join(self.path, "REPORT.txt")
