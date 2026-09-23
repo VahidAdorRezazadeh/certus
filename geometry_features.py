@@ -91,6 +91,7 @@ class FaceFeature:
     axial_length: Optional[float] = None
     is_internal: Optional[bool] = None   # True = hole (concave), False = boss
     angular_span_deg: Optional[float] = None  # 360 for a full cylinder
+    axis_point: Optional[Vec] = None          # a point on the axis
 
     # grouping
     group_id: Optional[int] = None
@@ -310,6 +311,13 @@ def _cylinder_props(tag: int):
         pts.append(gmsh.model.getValue(2, tag, [u, vm]))
 
     pa, pb, pc = pts[0], pts[len(pts) // 2], pts[-1]
+    if _norm(_sub(pc, pa)) < 1e-9 * max(1.0, _norm(pa)):
+        # full 360 degree face: first and last samples coincide, so the
+        # three-point circle degenerates. The old fallback averaged all
+        # samples, which counts that point twice and moved the centre of an
+        # 8 mm hole by 1.4 mm (measured). Use three points 120 degrees apart.
+        n = len(pts)
+        pa, pb, pc = pts[0], pts[n // 3], pts[(2 * n) // 3]
     ab, bc, ca = _sub(pb, pa), _sub(pc, pb), _sub(pa, pc)
     a, b, c = _norm(bc), _norm(ca), _norm(ab)
     area2 = _norm(_cross(ab, _sub(pc, pa)))     # 2 * triangle area
@@ -382,9 +390,10 @@ def catalogue_from_open_model(step_path_label: str = "") -> Catalogue:
                 f.normal = _plane_normal(tag)
             elif stype == "Cylinder":
                 try:
-                    ax, r, L, internal, span, _c = _cylinder_props(tag)
+                    ax, r, L, internal, span, c = _cylinder_props(tag)
                     f.axis, f.radius, f.axial_length = ax, r, L
                     f.is_internal, f.angular_span_deg = internal, span
+                    f.axis_point = tuple(c)
                 except Exception:
                     pass
             faces.append(f)
@@ -854,7 +863,8 @@ def surface_facets(selections: Sequence[NamedSelection]
     return out
 
 
-def facet_node_weights(selections: Sequence[NamedSelection]
+def facet_node_weights(selections: Sequence[NamedSelection],
+                       bearing: Optional[Dict[str, tuple]] = None
                        ) -> Dict[str, Dict[int, float]]:
     """Consistent nodal load weights (units of area) per selection.
 
@@ -866,10 +876,21 @@ def facet_node_weights(selections: Sequence[NamedSelection]
     error this project exists to avoid.
 
     For a 3-node triangle each node gets area/3.
+
+    bearing = {selection name: (force unit vector, {face tag: (axis, point)})}
+    turns a uniform traction on a hole into a pin bearing load: each facet is
+    weighted by max(0, cos theta), theta between the outward radial direction
+    at the facet and the force. Only the half of the hole the pin presses on
+    carries load, peaking where the radial direction is parallel to the force.
+    The nodal forces stay parallel to the resultant, so the total is exact
+    and there is no spurious transverse component. This approximates a radial
+    cosine pressure; a modelled pin with contact is the reference.
     """
     out: Dict[str, Dict[int, float]] = {}
+    bearing = bearing or {}
     for sel in selections:
         w: Dict[int, float] = {}
+        fdir, axes = bearing.get(sel.name, (None, {}))
         for face in sel.tags:
             st, _, sn = gmsh.model.mesh.getElements(2, face)
             for et, nodes in zip(st, sn):
@@ -885,6 +906,26 @@ def facet_node_weights(selections: Sequence[NamedSelection]
                           ux[2]*vx[0] - ux[0]*vx[2],
                           ux[0]*vx[1] - ux[1]*vx[0])
                     area = 0.5 * math.sqrt(sum(c*c for c in cr))
+                    # bearing: weight each receiving NODE by max(0, cos) at
+                    # its own position. Weighting per facet leaked 4.8 % of
+                    # the load past the equator of an 8 mm hole meshed at
+                    # 2.5 mm, because a coarse facet spans a wide arc.
+                    def _cos(nid):
+                        ax, ap = axes[face]
+                        q = gmsh.model.mesh.getNode(nid)[0]
+                        d = [q[k] - ap[k] for k in range(3)]
+                        da = sum(d[k] * ax[k] for k in range(3))
+                        rad = [d[k] - da * ax[k] for k in range(3)]
+                        rn = math.sqrt(sum(v * v for v in rad)) or 1.0
+                        return max(0.0, sum(rad[k] * fdir[k]
+                                            for k in range(3)) / rn)
+                    if fdir is not None and face in axes:
+                        recv = ids if npe == 3 else ids[3:]
+                        for i in recv:
+                            c = _cos(i)
+                            if c > 0.0:
+                                w[i] = w.get(i, 0.0) + area / 3.0 * c
+                        continue
                     if npe == 3:
                         for i in ids:
                             w[i] = w.get(i, 0.0) + area / 3.0

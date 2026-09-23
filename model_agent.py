@@ -364,6 +364,31 @@ def run(step_path: str,
         facets = GF.surface_facets(ses.selections)
         total_nodes = mres.quality.n_nodes
 
+        # ---- how the force enters a hole: computed, not asked ------------
+        # A pin loads only the half of a hole it presses on. A uniform
+        # traction over all 360 degrees pulls the far side of the hole
+        # toward the load, which no pin can do.
+        dist, axes = "uniform", None
+        if load_kind == "force":
+            try:
+                lf = [ses.catalogue.face(int(t)) for t in load_tags]
+            except KeyError:
+                lf = []
+            fmag = sum(v * v for v in force) ** 0.5
+            if lf and fmag > 0 and all(f.is_hole and f.axis and f.axis_point
+                                       for f in lf):
+                axial = max(abs(sum(f.axis[k] * force[k] for k in range(3)))
+                            / fmag for f in lf)
+                if axial < 0.1:
+                    dist = "bearing"
+                    axes = {f.tag: (f.axis, f.axis_point) for f in lf}
+                else:
+                    rd.warn(f"The load face is a hole but the force has "
+                            f"{axial:.0%} of its magnitude along the hole "
+                            f"axis. A pin cannot transmit that by bearing. "
+                            f"Loaded as a uniform traction instead.")
+        rd.set("load_distribution", dist)
+
         decks, creport = {}, None
         for sv in solvers:
             deck = rd.case(sv, "case.inp")
@@ -373,7 +398,9 @@ def run(step_path: str,
             spec = CaseSpec(material=material, solver=sv, nlgeom=nlgeom,
                             loads=[LoadSpec("LOAD_FACE", load_kind,
                                             tuple(force),
-                                            pressure=pressure)],
+                                            pressure=pressure,
+                                            distribution=dist,
+                                            bearing_axes=axes)],
                             constraints=[ConstraintSpec("FIX_FACE",
                                                         dofs=fix_dofs,
                                                         encastre=fix_dofs ==
@@ -463,6 +490,39 @@ def run(step_path: str,
                               "trust this model until it does.")
             else:
                 headline = "SOLVED. No closed form reference for this case."
+            # ---- the displacement that answers "how stiff": work
+            # conjugate to the applied load, sum(F_i . u_i) / |F|. Max |U|
+            # anywhere is a local peak and is reported only for context.
+            try:
+                from invariants import read_deck
+                dk = read_deck(deck)
+                disp = read_frd_disp(info)
+                F = [0.0, 0.0, 0.0]
+                work = 0.0
+                for nid, dof, val in dk.cloads:
+                    if 1 <= dof <= 3 and nid in disp:
+                        F[dof - 1] += val
+                        work += val * disp[nid][dof - 1]
+                fm = sum(v * v for v in F) ** 0.5
+                if fm > 0:
+                    delta = work / fm
+                    umax = max(sum(c * c for c in v) ** 0.5
+                               for v in disp.values())
+                    rd.set("load_point_displacement_mm", delta)
+                    rd.set("max_abs_U_mm", umax)
+                    rd.set("stiffness_N_per_mm", fm / delta if delta else None)
+                    rd.section("LOAD-POINT DISPLACEMENT (work conjugate)",
+                               f"  sum(F.u)/|F|   {delta:.6e} mm along the "
+                               f"load\n  stiffness      {fm / delta:.4g} N/mm"
+                               f"\n  max |U|        {umax:.6e} mm (local "
+                               f"peak, context only)")
+                    if not reference:
+                        headline = (f"SOLVED. Load-point displacement "
+                                    f"{delta:.4e} mm, stiffness "
+                                    f"{fm / delta:.4g} N/mm. No closed form "
+                                    f"reference for this case.")
+            except Exception as exc:          # report, never hide
+                rd.warn(f"load-point displacement not computed: {exc}")
         else:
             rd.warn(f"solve failed: {info}")
             headline = f"SOLVE FAILED: {info}"

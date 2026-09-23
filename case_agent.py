@@ -53,6 +53,10 @@ class LoadSpec:
     kind: str = "force"            # "force" (total N) or "pressure" (MPa)
     vector: Vec = (0.0, 0.0, -1.0)  # direction and magnitude for "force"
     pressure: float = 0.0          # positive means INTO the surface
+    # "uniform" traction over the faces, or "bearing": pin on a hole, see
+    # GF.facet_node_weights. bearing_axes = {face tag: (axis, axis point)}
+    distribution: str = "uniform"
+    bearing_axes: Optional[Dict[int, tuple]] = None
 
     def resultant(self) -> Vec:
         return self.vector if self.kind == "force" else (0.0, 0.0, 0.0)
@@ -390,7 +394,7 @@ _SUPPORTS_ENCASTRE = {"abaqus": True, "calculix": False}
 _OUTPUT_BLOCK = {
     "abaqus": ("*OUTPUT, FIELD, VARIABLE=PRESELECT\n"
                "*OUTPUT, HISTORY, VARIABLE=PRESELECT\n"),
-    "calculix": ("*NODE FILE\nU\n*EL FILE\nS, E\n"),
+    "calculix": ("*NODE FILE\nU, RF\n*EL FILE\nS, E\n"),
 }
 
 
@@ -465,7 +469,13 @@ def write_case(deck_path: str,
     weights: Dict[str, Dict[int, float]] = {}
     if force_loads:
         sels = [by_name[l.selection] for l in force_loads]
-        weights = GF.facet_node_weights(sels)
+        bearing = {}
+        for l in force_loads:
+            if l.distribution == "bearing" and l.bearing_axes:
+                m = math.sqrt(sum(v * v for v in l.vector)) or 1.0
+                bearing[l.selection] = (tuple(v / m for v in l.vector),
+                                        l.bearing_axes)
+        weights = GF.facet_node_weights(sels, bearing)
 
     # -- write ----------------------------------------------------------
     m = spec.material
@@ -520,10 +530,17 @@ def write_case(deck_path: str,
                         val = comp * wi / total_w
                         if abs(val) > 1e-14:
                             f.write(f"{nid}, {dof}, {val:.10g}\n")
-                report.notes.append(
-                    f"load '{l.selection}': {l.vector} N spread over "
-                    f"{len(w)} mid-side nodes, total facet area "
-                    f"{total_w:.3f} mm2")
+                if l.selection in bearing:
+                    report.notes.append(
+                        f"load '{l.selection}': {l.vector} N as a PIN "
+                        f"BEARING load on {len(w)} mid-side nodes, cosine "
+                        f"weighted on the half of each hole facing the "
+                        f"force. Parallel nodal forces, exact resultant.")
+                else:
+                    report.notes.append(
+                        f"load '{l.selection}': {l.vector} N spread over "
+                        f"{len(w)} mid-side nodes, total facet area "
+                        f"{total_w:.3f} mm2")
 
         pressures = [l for l in spec.loads if l.kind == "pressure"]
         if pressures:
@@ -535,6 +552,10 @@ def write_case(deck_path: str,
                     f"*SURFACE of that name in the deck.")
 
         f.write(_OUTPUT_BLOCK[spec.solver])
+        if spec.solver == "calculix":
+            # reactions per constraint set, readable by set name
+            for c in spec.constraints:
+                f.write(f"*NODE PRINT, NSET={c.selection}, TOTALS=ONLY\nRF\n")
         f.write("*END STEP\n")
 
     if spec.nlgeom:

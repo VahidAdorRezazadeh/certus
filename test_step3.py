@@ -112,6 +112,48 @@ check("old positional read was the wrong set", old == top,
       f"(positional returned {old})")
 check("missing set returns None", INV.read_total_force(dat, "NOPE") is None)
 
+# 5. pin bearing load, reactions in the deck, load-point displacement ----
+# Real bracket through the pipeline. -Z and +Z must load opposite halves of
+# the hole, split 50/50 between the lugs, with the exact resultant.
+if os.path.exists("part.step") and shutil.which("ccx"):
+    import json, io, contextlib
+    import geometry_features as GF
+    from geom_session import GeomSession
+    import model_agent as MA
+    with GeomSession("part.step") as ses:
+        lt = list(GF.largest_hole(ses.catalogue).tags)
+        ft = list(GF.extreme_planar_face(ses.catalogue, axis=2,
+                                         side="min").tags)
+    for fz in (-100.0, 100.0):
+        with contextlib.redirect_stdout(io.StringIO()):
+            rd = MA.run("part.step", "t3", MA.MATERIALS["steel"], lt, ft,
+                        (0, 0, fz), solvers=("calculix",), target_size=2.5,
+                        solve_with="calculix", run_root=W)
+        js = json.load(open(os.path.join(rd.path, "run.json")))
+        dk = INV.read_deck(os.path.join(rd.path, "case_calculix",
+                                        "case.inp"))
+        zc = 23.04
+        zs = [dk.nodes[n][2] - zc for n, _, _ in dk.cloads]
+        # a node exactly on the equator carries cos = 0, so strict sign
+        side = all(z * fz > 0 for z in zs)
+        fl = sum(v for n, _, v in dk.cloads if dk.nodes[n][0] < 0)
+        fr = sum(v for n, _, v in dk.cloads if dk.nodes[n][0] > 0)
+        check(f"bearing Fz={fz:+.0f}: only the pressed half is loaded",
+              js["load_distribution"] == "bearing" and side,
+              f"{len(zs)} nodes")
+        check(f"bearing Fz={fz:+.0f}: 50/50 between lugs, exact total",
+              # meshes are not mirror symmetric: allow 1e-3 of the load
+              abs(fl - fz / 2) < 1e-3 * abs(fz) and
+              abs(fl + fr - fz) < 1e-9 * abs(fz),
+              f"{fl:.4f} / {fr:.4f}")
+        rf = INV.read_total_force(os.path.join(rd.path, "results",
+                                               "case.dat"), "FIX_FACE")
+        check(f"reactions printed for FIX_FACE and balance Fz={fz:+.0f}",
+              rf is not None and abs(rf[2] + fz) < 1e-6 * abs(fz), f"{rf}")
+        d = js.get("load_point_displacement_mm")
+        check(f"load-point displacement reported, sign follows load",
+              d is not None and d > 0, f"{d}")
+
 shutil.rmtree(W, ignore_errors=True)
 print("\nALL STEP 3 CHECKS BEHAVE AS SPECIFIED" if ok else "\nFAILURES ABOVE")
 sys.exit(0 if ok else 1)
