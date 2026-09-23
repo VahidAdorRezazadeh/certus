@@ -83,6 +83,10 @@ class MeshRequest:
     out_prefix: str = "mesh"
     solver: str = "calculix"          # the DEPLOYMENT solver
     oracle_solver: Optional[str] = None   # optional reference-truth deck
+    # (constraint centroid, lever unit vector, transverse force unit vector,
+    # lever length). When given, R7 counts elements on the mesh instead of
+    # trusting 2V/A over the requested size. See thickness.py.
+    section: Optional[tuple] = None
 
 
 @dataclass
@@ -370,13 +374,31 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2,
     """
     element, notes = plan_element(req)
     attempt = 0
+    sized_from_proxy = False
     quality = msh = deck = None
 
     while True:
         attempt += 1
         quality, msh, deck = mesh_step(req, element, session=session)
-        element.elements_through_thickness = max(
-            1, int(math.floor(quality.elements_through_wall)))
+        measured = None
+        if req.section is not None and \
+                req.load_case.dominant_mode in BENDING_LIKE:
+            import thickness as TH
+            measured = TH.elements_through_member(*req.section)
+        if measured is not None:
+            n_thru = measured.elements
+            element.thickness_source = "measured"
+            element.measured_thickness = measured.thickness
+            notes.append(f"attempt {attempt}: measured {measured.elements:.2f} "
+                         f"element(s) across the {measured.thickness:.2f} mm "
+                         f"member (local edge {measured.local_size:.3f} mm "
+                         f"on the mesh, requested size "
+                         f"{quality.char_size:.3f} mm)")
+        else:
+            n_thru = quality.elements_through_wall
+            element.thickness_source = ("self-derived" if sized_from_proxy
+                                        else "proxy")
+        element.elements_through_thickness = max(1, int(math.floor(n_thru)))
 
         problems = []
         quality_failure = False
@@ -388,8 +410,8 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2,
                 f"min SICN {quality.min_sicn:.4f} below {MIN_ACCEPTABLE_SICN}")
             quality_failure = True
         if (req.load_case.dominant_mode in BENDING_LIKE
-                and quality.elements_through_wall
-                < MIN_ELEMENTS_THROUGH_THICKNESS_BENDING):
+                and element.thickness_source != "self-derived"
+                and n_thru < MIN_ELEMENTS_THROUGH_THICKNESS_BENDING):
             problems.append("too few elements through the thin direction "
                             "for a bending load")
 
@@ -410,24 +432,41 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2,
                 f"to quadratic tets. Consequence: no reduced or hybrid "
                 f"integration is available for tets in this stack.")
             element = ElementSpec("tet", 2, "full")
-        elif quality.elements_through_wall < MIN_ELEMENTS_THROUGH_THICKNESS_BENDING:
+        elif n_thru < MIN_ELEMENTS_THROUGH_THICKNESS_BENDING:
             # Correct lever: size from the WALL, not from the bounding box.
-            # Halving a bounding-box-derived size converges on a thin feature
-            # very slowly and wastes elements everywhere else.
-            new_size = quality.est_wall_thickness / \
-                MIN_ELEMENTS_THROUGH_THICKNESS_BENDING
-            notes.append(
-                f"retry {attempt}: {'; '.join(problems)} -> sizing from the "
-                f"estimated wall thickness ({quality.est_wall_thickness:.2f} "
-                f"mm), target element size {new_size:.3f} mm")
+            if measured is not None:
+                # scale the size by the measured shortfall; the next attempt
+                # is measured again, so the mesher's own deviation from the
+                # requested size can still leave it short
+                new_size = quality.char_size * n_thru / \
+                    (MIN_ELEMENTS_THROUGH_THICKNESS_BENDING + 0.25)
+                notes.append(
+                    f"retry {attempt}: {'; '.join(problems)} -> measured "
+                    f"{n_thru:.2f} across {measured.thickness:.2f} mm, "
+                    f"target element size {new_size:.3f} mm, re-measured "
+                    f"after meshing")
+            else:
+                new_size = quality.est_wall_thickness / \
+                    MIN_ELEMENTS_THROUGH_THICKNESS_BENDING
+                sized_from_proxy = True
+                notes.append(
+                    f"retry {attempt}: {'; '.join(problems)} -> sizing from "
+                    f"the 2V/A wall estimate "
+                    f"({quality.est_wall_thickness:.2f} mm), target element "
+                    f"size {new_size:.3f} mm. R7 cannot judge the result: "
+                    f"its input now follows from this choice.")
             req.target_size = new_size
         else:
+            # Refine FROM THE SIZE JUST USED. The old lever reset target_size
+            # to None and re-derived it from the bounding box, which on the
+            # bracket turned a 1.27 mm mesh into a coarser one (measured: 3.09
+            # elements through the lug became 1.71). A refinement retry must
+            # never coarsen.
+            new_size = 0.75 * quality.char_size
             notes.append(
-                f"retry {attempt}: {'; '.join(problems)} -> refining size")
-            req.elements_across_min_dim = max(
-                MIN_ELEMENTS_THROUGH_THICKNESS_BENDING,
-                req.elements_across_min_dim * 2)
-            req.target_size = None
+                f"retry {attempt}: {'; '.join(problems)} -> refining size "
+                f"{quality.char_size:.3f} -> {new_size:.3f} mm")
+            req.target_size = new_size
 
     # ---- CAD faces to node sets, AFTER the final mesh -----------------
     # Node tags are mesh entities. Every retry called mesh.clear(), which

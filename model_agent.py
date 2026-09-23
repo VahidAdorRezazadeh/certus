@@ -344,7 +344,11 @@ def run(step_path: str,
         req = MeshRequest(step_path, material, assumed,
                           target_size=target_size,
                           out_prefix=rd.prefix("mesh", "mesh"),
-                          solver="calculix")
+                          solver="calculix",
+                          section=((pre.constraint_centroid, pre.lever_dir,
+                                    pre.depth_dir, pre.lever_arm)
+                                   if pre is not None and pre.lever_dir
+                                   else None))
         mres = run_mesh_agent(req, session=ses)
         print(mres.render())
 
@@ -541,8 +545,13 @@ def run(step_path: str,
     caveats = [{"source": "case agent", "detail": w}
                for w in creport.warnings]
     solved = headline.startswith("SOLVED")
-    checked = ["locking rules R1-R7", "load case consistency"]
-    not_checked = ["constraint sufficiency (rigid body modes)",
+    abstained = [f.rule_id for f in lreport.findings
+                 if f.severity.value == "BLOCKED"]
+    checked = [("locking rules R1-R7" if not abstained else
+                "locking rules except " + ", ".join(abstained)),
+               "load case consistency"]
+    not_checked = [f"{r} (abstained, input not measurable)"
+                   for r in abstained] + ["constraint sufficiency (rigid body modes)",
                    "overconstraint (node count heuristic only, "
                    "reported as a caveat)",
                    "load against stated intent", "mesh convergence"]

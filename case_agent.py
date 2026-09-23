@@ -36,6 +36,8 @@ import math
 
 import gmsh
 
+import thickness as TH
+
 import geometry_features as GF
 from locking_check import MaterialSpec, LoadCase
 from solvers import get_solver
@@ -100,6 +102,8 @@ class ModeEvidence:
     load_centroid: Vec
     constraint_centroid: Vec
     reasoning: str
+    lever_dir: Optional[Vec] = None       # unit vector, constraint -> load
+    depth_dir: Optional[Vec] = None       # unit transverse force direction
 
     def render(self) -> str:
         return (
@@ -186,51 +190,10 @@ def geometry_mode_inputs(load_tags: Sequence[int], fix_tags: Sequence[int],
     return wcentroid(load_tags), wcentroid(fix_tags), pts
 
 
-def section_depth_by_rays(cc: Vec, e: Vec, d_dir: Vec, rlen: float,
-                          n_rays: int = 11, n_steps: int = 400
+def section_depth_by_rays(cc: Vec, e: Vec, d_dir: Vec, rlen: float
                           ) -> Optional[Tuple[float, List[float]]]:
-    """Depth of the load-carrying section, measured on the solid itself.
-
-    Cuts the part with the plane normal to the lever arm at half the lever
-    arm, fires n_rays parallel rays across that plane along the transverse
-    force direction, and keeps the contiguous solid intervals. The depth is
-    the longest interval: the thickest member the section cuts. Two thin
-    lugs with a gap count as two 5 mm members, not one 17 mm block, which a
-    bounding box or a point cloud extent cannot tell apart.
-
-    Returns None when the OCC model cannot answer point-in-solid queries.
-    """
-    vols = [t for _, t in gmsh.model.getEntities(3)]
-    if not vols:
-        return None
-    lo, hi = _model_bbox()
-    diag = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
-    t = (e[1] * d_dir[2] - e[2] * d_dir[1],
-         e[2] * d_dir[0] - e[0] * d_dir[2],
-         e[0] * d_dir[1] - e[1] * d_dir[0])
-    p0 = tuple(cc[i] + 0.5 * rlen * e[i] for i in range(3))
-    ds = 2.0 * diag / n_steps
-    intervals: List[float] = []
-    try:
-        for k in range(n_rays):
-            a = -0.5 * diag + diag * k / (n_rays - 1)
-            run = 0
-            for j in range(n_steps + 1):
-                sj = -diag + j * ds
-                p = [p0[i] + a * t[i] + sj * d_dir[i] for i in range(3)]
-                inside = any(gmsh.model.isInside(3, v, p) for v in vols)
-                if inside:
-                    run += 1
-                elif run:
-                    intervals.append(run * ds)
-                    run = 0
-            if run:
-                intervals.append(run * ds)
-    except Exception:
-        return None
-    if not intervals:
-        return None
-    return max(intervals), sorted(set(round(x, 2) for x in intervals))
+    """Thickest member cut at half the lever arm. See thickness.py."""
+    return TH.section_depth(cc, e, d_dir, rlen)
 
 
 # ---------------------------------------------------------------------------
@@ -334,12 +297,12 @@ def compute_dominant_mode(load_pts: Sequence[Vec],
                             lc, cc,
                             f"transverse force on a lever arm {slender:.1f} "
                             f"times the section depth, so bending stress "
-                            f"dominates shear" + depth_note)
+                            f"dominates shear" + depth_note, lever_dir=e, depth_dir=d_dir)
     return ModeEvidence("shear", rlen, depth, slender, f_along, f_across,
                         lc, cc,
                         f"transverse force with a lever arm only "
                         f"{slender:.1f} times the section depth, so shear "
-                        f"is not negligible against bending" + depth_note)
+                        f"is not negligible against bending" + depth_note, lever_dir=e, depth_dir=d_dir)
 
 
 # ---------------------------------------------------------------------------

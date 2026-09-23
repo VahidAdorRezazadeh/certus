@@ -80,6 +80,12 @@ class ElementSpec:
     integration: str         # "full" | "reduced" | "incompatible" | "hybrid"
     hourglass_control: bool = False   # only meaningful for reduced order-1
     elements_through_thickness: Optional[int] = None  # optional bending check
+    # where that number came from. "measured" = counted on the final mesh
+    # along the member chord. "proxy" = 2V/A over the element size.
+    # "self-derived" = proxy after a retry that set the size FROM that proxy,
+    # which makes the count equal the threshold by construction.
+    thickness_source: str = "proxy"
+    measured_thickness: Optional[float] = None
 
     def label(self) -> str:
         return f"{self.family}/order{self.order}/{self.integration}"
@@ -426,13 +432,28 @@ def _r7_bending_resolution(el, mat, lc) -> Optional[Finding]:
     n = el.elements_through_thickness
     if n is None or lc.dominant_mode not in BENDING_LIKE:
         return None
+    src = getattr(el, "thickness_source", "proxy")
+    if src == "self-derived":
+        return Finding(
+            "R7", "bending resolution NOT EVALUATED", Severity.BLOCKED,
+            f"the element count ({n}) was derived from the element size the "
+            f"retry itself chose from the same 2V/A estimate, so it equals "
+            f"the threshold by construction.",
+            "through-thickness resolution in bending is unknown. Absence of "
+            "an R7 finding does not mean the wall is resolved.",
+            "supply the section geometry (force direction and lever arm) so "
+            "the count can be measured on the mesh.",
+            Owner.MESH)
     if n >= MIN_ELEMENTS_THROUGH_THICKNESS_BENDING:
         return None
     sev = Severity.SEVERE if n <= 1 else Severity.MODERATE
+    where = (f"measured on the mesh across a {el.measured_thickness:.2f} mm "
+             f"member" if src == "measured" and el.measured_thickness
+             else "estimated from 2V/A, not measured")
     return Finding(
         "R7", "insufficient through-thickness resolution in bending", sev,
-        f"{n} element(s) through the thickness under a {lc.dominant_mode} "
-        f"load. The linear through-thickness stress variation of bending "
+        f"{n} element(s) through the thickness ({where}) under a "
+        f"{lc.dominant_mode} load. The linear through-thickness stress variation of bending "
         f"cannot be resolved.",
         "bending stiffness and surface stress both wrong, separately from any "
         "locking effect.",
