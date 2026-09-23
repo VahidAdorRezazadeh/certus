@@ -1,7 +1,7 @@
 """Width-detecting .frd displacement reader, shared by results_check and
 invariants so there is exactly one copy of this logic."""
 import re
-from typing import Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple
 
 # candidate node-id field widths and value field widths seen in the wild
 _NODEW = (10, 5)
@@ -77,7 +77,49 @@ def _parse_line(rest: str):
     return None
 
 
-def read_frd_disp(path: str) -> Dict[int, Tuple[float, float, float]]:
+def read_frd_disp(path: str, which: str = "last"
+                  ) -> Dict[int, Tuple[float, float, float]]:
+    """Displacements of ONE result block: the last one by default.
+
+    A multi-increment run writes one DISP block per increment. This used to
+    return the FIRST block. Measured: a *STATIC step of period 10 with
+    initial increment 0.1 read 1.2118e-05 mm instead of 1.2118e-03 mm, the
+    load at the first increment (1 percent). which = "last" | "first".
+    """
+    blocks = read_frd_disp_blocks(path)
+    return (blocks[-1] if which == "last" else blocks[0])["disp"]
+
+
+def read_frd_disp_blocks(path: str) -> List[dict]:
+    """Every DISP block as {"step", "inc", "time", "disp"}, in file order."""
+    raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    heads = [i for i, l in enumerate(raw)
+             if "DISP" in l and l.strip().startswith("-4")]
+    if not heads:
+        raise RuntimeError(f"no displacement block found in {path}")
+    out = []
+    for h in heads:
+        step = inc = None
+        t = None
+        for j in range(h - 1, max(-1, h - 6), -1):
+            l = raw[j]
+            if "PSTEP" in l:
+                f = l.split()
+                try:
+                    inc, step = int(f[2]), int(f[3])
+                except (IndexError, ValueError):
+                    pass
+            if l.strip().startswith("100C"):
+                try:
+                    t = float(l.split()[2])
+                except (IndexError, ValueError):
+                    pass
+        out.append({"step": step, "inc": inc, "time": t,
+                    "disp": _read_disp_block(raw, h, path)})
+    return out
+
+
+def _read_disp_block(raw, start, path) -> Dict[int, Tuple[float, float, float]]:
     """Node displacements from a CalculiX .frd, layout detected not assumed.
 
     Two readers were tried before this one and both were wrong.
@@ -100,15 +142,9 @@ def read_frd_disp(path: str) -> Dict[int, Tuple[float, float, float]]:
     unambiguous: after the node field, whatever remains divides evenly by
     three.
     """
-    raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
-    start = next((i for i, l in enumerate(raw)
-                  if "DISP" in l and l.strip().startswith("-4")), None)
-    if start is None:
-        raise RuntimeError(f"no displacement block found in {path}")
-
     disp: Dict[int, Tuple[float, float, float]] = {}
     skipped = []
-    for l in raw[start:]:
+    for l in raw[start + 1:]:
         if l.strip().startswith("-3"):
             break
         if not l.startswith(" -1"):
