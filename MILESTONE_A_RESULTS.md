@@ -123,3 +123,28 @@ and `invariants.py` must not be sold as covering it.
 
 What INV1 does catch, verified: a declared load that differs from the applied
 load. Halving the declared resultant produced a FAIL.
+
+## Post-A falsification F1. CalculiX does not reject a partially constrained model
+
+CalculiX 2.21, SPOOLES solver, 23 September 2026. Same table on Linux and on
+Windows. A 10 mm cube, 4x4x4 C3D8, bottom face constrained, 100 N on the top face.
+
+| case | free rigid modes | exit | warnings | max abs U, top (mm) |
+|---|---|---|---|---|
+| bottom clamped (control) | 0 | 0 | 0 | 7.724e-05 |
+| bottom fixed x,y; load z | 1 | 0 | 0 | 8.069e+10 |
+| bottom fixed x,y; load x | 1 | 0 | 0 | 5.197e+10 |
+| bottom roller (z only); load z | 3 | 0 | 0 | 7.874e-05 |
+| bottom roller; load x | 3 | 0 | 0 | 3.652e+10 |
+
+The solver never refuses a singular model. The symptom after the solve is
+unreliable: sometimes absurd numbers, sometimes a plausible answer (the roller
+with a z load). The zero-energy mode check therefore stays, and it must be a
+pre-solve rank test on the BC set.
+
+The same defect ships in model_agent.py: the menu option "fixed in the load
+direction only" writes FIX_FACE, 3, 3. On the real bracket under -Z it solved
+with no warning, max abs U 8.7e-05 mm, headline SOLVED.
+
+F2. A load on a wrong but plausible face cannot be caught by the seven-check
+plan by construction (see R6). It belongs to the face catalogue.
