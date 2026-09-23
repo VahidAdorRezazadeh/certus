@@ -8,6 +8,9 @@ STEP in, CalculiX deck out, solve, report with a verdict that can fail.
     python cad_agent.py ...                                  # text or image -> part.step
     python model_agent.py part.step --solvers calculix --solve calculix --size 2.5
     python model_agent.py --cantilever --solvers calculix --solve calculix   # validation case
+    python model_agent.py part.step --solvers calculix --solve calculix --converge 4,2,1   # + Richardson study
+
+    python test_checks.py        # the seven checks: seed, solve, verdict
 
 Every run writes `runs/<stamp>_<label>/` with `REPORT.txt` and `run.json` (not tracked).
 
@@ -29,7 +32,7 @@ Every run writes `runs/<stamp>_<label>/` with `REPORT.txt` and `run.json` (not t
 | `thickness.py` | member thickness and elements through it, measured on the mesh (R7) |
 | `verify_sets.py` | reads a written deck back: did each node set land on the intended face |
 | `run_dir.py` | run folder, REPORT.txt, run.json |
-| `test_chain.py`, `test_checks.py`, `test_step3.py`, `test_step4.py`, `test_step6.py` | tests; each check has a seeded known-bad and a known-good case |
+| `test_chain.py`, `test_checks.py`, `test_step3.py` ... `test_step11.py`, `test_checks_helpers.py` | tests; every check has a seeded known-bad and a known-good case |
 | `part.step`, `part_spec.json` | reference bracket and its spec |
 
 `Literature/` and `Presentation/` hold the review and the deck.

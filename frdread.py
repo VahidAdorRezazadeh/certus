@@ -45,7 +45,7 @@ _VALPATS = [re.compile(r"[-+]?\d\.\d+[EeDd][-+]\d{3}"),
             re.compile(r"[-+]?\d*\.\d+[EeDd][-+]\d+")]
 
 
-def _parse_line(rest: str):
+def _parse_line(rest: str, ncomp: int = 3):
     """Parse one .frd data line by anchoring on the exponent, not on columns.
 
     Fixed widths do not exist here. CalculiX writes E12.5, but with a
@@ -63,7 +63,7 @@ def _parse_line(rest: str):
     """
     for pat in _VALPATS:
         m = list(pat.finditer(rest))
-        if len(m) != 3:
+        if len(m) != ncomp:
             continue
         head = rest[:m[0].start()].strip()
         if not head or not head.lstrip("+-").isdigit():
@@ -97,7 +97,21 @@ def read_frd_field(path: str, name: str = "FORC", which: str = "last"
     return (blocks[-1] if which == "last" else blocks[0])["disp"]
 
 
-def read_frd_disp_blocks(path: str, name: str = "DISP") -> List[dict]:
+def read_frd_stress(path: str, which: str = "last"
+                    ) -> Dict[int, Tuple[float, ...]]:
+    """Nodal stress (sxx, syy, szz, sxy, syz, szx) of one result block."""
+    blocks = read_frd_disp_blocks(path, "STRESS", ncomp=6)
+    return (blocks[-1] if which == "last" else blocks[0])["disp"]
+
+
+def von_mises(s) -> float:
+    xx, yy, zz, xy, yz, zx = s
+    return (0.5 * ((xx - yy) ** 2 + (yy - zz) ** 2 + (zz - xx) ** 2)
+            + 3.0 * (xy * xy + yz * yz + zx * zx)) ** 0.5
+
+
+def read_frd_disp_blocks(path: str, name: str = "DISP",
+                         ncomp: int = 3) -> List[dict]:
     """Every block of a 3-component nodal field as {"step", "inc", "time",
     "disp"}, in file order. name = "DISP" or "FORC"."""
     raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
@@ -123,11 +137,12 @@ def read_frd_disp_blocks(path: str, name: str = "DISP") -> List[dict]:
                 except (IndexError, ValueError):
                     pass
         out.append({"step": step, "inc": inc, "time": t,
-                    "disp": _read_disp_block(raw, h, path)})
+                    "disp": _read_disp_block(raw, h, path, ncomp)})
     return out
 
 
-def _read_disp_block(raw, start, path) -> Dict[int, Tuple[float, float, float]]:
+def _read_disp_block(raw, start, path, ncomp: int = 3
+                     ) -> Dict[int, Tuple[float, ...]]:
     """Node displacements from a CalculiX .frd, layout detected not assumed.
 
     Two readers were tried before this one and both were wrong.
@@ -157,7 +172,7 @@ def _read_disp_block(raw, start, path) -> Dict[int, Tuple[float, float, float]]:
             break
         if not l.startswith(" -1"):
             continue
-        got = _parse_line(l[3:].rstrip("\r\n"))
+        got = _parse_line(l[3:].rstrip("\r\n"), ncomp)
         if got is None:
             if len(skipped) < 3:
                 skipped.append(l)

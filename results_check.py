@@ -199,3 +199,79 @@ def ccx_outcome(log: str, returncode: int, job_base: str,
                                  f"{period:g}")
     return CcxOutcome(True, "finished, step period reached"
                       if t_end is not None else "finished (no .sta)")
+
+
+# ---------------------------------------------------------------------------
+# Richardson extrapolation and observed order: a convergence check that can
+# fail. Procedure after Celik et al., J. Fluids Eng. 130 (2008) 078001
+# (three grids, possibly non-constant refinement ratio, fixed-point p).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ConvergenceVerdict:
+    verdict: str                 # PASS | FAIL | NOT EVALUATED
+    detail: str
+    p: Optional[float] = None
+    extrapolated: Optional[float] = None
+    gci_fine: Optional[float] = None
+
+
+def richardson(pairs: List[Tuple[float, float]], gci_limit: float = 0.02,
+               p_min: float = 0.5) -> ConvergenceVerdict:
+    """pairs = [(h, f)] for three meshes, any order. FAIL when the three
+    results are identical (the meshes are not distinct), when the changes
+    oscillate, when the observed order is below p_min (diverging or not in
+    the asymptotic range, e.g. a stress singularity), or when the fine-grid
+    GCI exceeds gci_limit."""
+    import math
+    if len(pairs) < 3:
+        return ConvergenceVerdict("NOT EVALUATED", "needs three meshes")
+    (h3, f3), (h2, f2), (h1, f1) = sorted(pairs)[:3]    # 1 coarse, 3 fine
+    if len({round(h, 9) for h in (h1, h2, h3)}) < 3:
+        return ConvergenceVerdict("FAIL", "two meshes have the same size: "
+                                  "the study cannot show convergence")
+    e21, e32 = f2 - f1, f3 - f2
+    scale = max(abs(f3), 1e-30)
+    if abs(e21) < 1e-12 * scale and abs(e32) < 1e-12 * scale:
+        return ConvergenceVerdict("FAIL", "all three results are identical: "
+                                  "the meshes were not really refined, so "
+                                  "the study proves nothing")
+    if abs(e32) < 1e-12 * scale or abs(e21) < 1e-12 * scale:
+        return ConvergenceVerdict("NOT EVALUATED", "one change is zero; "
+                                  "observed order undefined")
+    if e32 / e21 < 0:
+        return ConvergenceVerdict("FAIL", f"oscillating: {f1:.6g} -> "
+                                  f"{f2:.6g} -> {f3:.6g}")
+    if e32 / e21 > 0 and max(abs(e21), abs(e32)) < 1e-3 * scale:
+        # Both changes below 0.1 percent: the order is not resolvable above
+        # the noise of an unstructured mesh, and the value has settled.
+        return ConvergenceVerdict("PASS", f"monotone and settled: changes "
+                                  f"{e21 / scale:+.2e}, {e32 / scale:+.2e} of "
+                                  f"the value, below 0.1%; observed order "
+                                  f"not resolvable at this level")
+    r21, r32 = h1 / h2, h2 / h3
+    s = 1.0 if e32 / e21 > 0 else -1.0
+    p = abs(math.log(abs(e32 / e21))) / math.log(r21)
+    for _ in range(100):
+        q = math.log((r21 ** p - s) / (r32 ** p - s))
+        pn = abs(math.log(abs(e21 / e32)) + q) / math.log(r21)
+        if abs(pn - p) < 1e-10:
+            p = pn
+            break
+        p = pn
+    if abs(e32) >= abs(e21):
+        return ConvergenceVerdict("FAIL", f"not converging: changes "
+                                  f"{e21:+.4g} then {e32:+.4g} do not shrink "
+                                  f"({f1:.6g} -> {f2:.6g} -> {f3:.6g}). "
+                                  f"Typical of a singularity", p=None)
+    ext = (r32 ** p * f3 - f2) / (r32 ** p - 1)
+    gci = 1.25 * abs(e32 / scale) / (r32 ** p - 1)
+    base = (f"observed order p = {p:.2f}, extrapolated {ext:.6g}, "
+            f"fine-grid GCI {gci:.2%}")
+    if p < p_min:
+        return ConvergenceVerdict("FAIL", base + f"; p below {p_min}: not in "
+                                  f"the asymptotic range", p, ext, gci)
+    if gci > gci_limit:
+        return ConvergenceVerdict("FAIL", base + f" above {gci_limit:.0%}",
+                                  p, ext, gci)
+    return ConvergenceVerdict("PASS", base, p, ext, gci)

@@ -303,6 +303,7 @@ def run(step_path: str,
         reference: Optional[dict] = None,
         solve_with: Optional[str] = None,
         asserted_mode: Optional[str] = None,
+        mesh_retries: int = 2,
         run_root: str = "runs") -> RunDir:
 
     rd = RunDir(label, root=run_root, solvers=tuple(solvers), meta={
@@ -319,6 +320,7 @@ def run(step_path: str,
 
     with GeomSession(step_path) as ses:
         rd.section("GEOMETRY AND FEATURE CATALOGUE", ses.catalogue.render())
+        rd.set("volume_mm3", ses.catalogue.volume)
 
         ses.add_selection("LOAD_FACE", load_tags, "load")
         ses.add_selection("FIX_FACE", fix_tags, "constraint")
@@ -359,7 +361,7 @@ def run(step_path: str,
                                     pre.depth_dir, pre.lever_arm)
                                    if pre is not None and pre.lever_dir
                                    else None))
-        mres = run_mesh_agent(req, session=ses)
+        mres = run_mesh_agent(req, max_retries=mesh_retries, session=ses)
         print(mres.render())
 
         rd.section("WHAT WAS ASKED FOR (intent, supplied by the user)",
@@ -544,6 +546,12 @@ def run(step_path: str,
                     umax = max(sum(c * c for c in v) ** 0.5
                                for v in disp.values())
                     rd.set("load_point_displacement_mm", delta)
+                    try:
+                        from frdread import read_frd_stress, von_mises
+                        rd.set("max_von_mises_MPa", max(
+                            von_mises(s) for s in read_frd_stress(info).values()))
+                    except Exception:
+                        pass
                     rd.set("max_abs_U_mm", umax)
                     rd.set("stiffness_N_per_mm", fm / delta if delta else None)
                     rd.section("LOAD-POINT DISPLACEMENT (work conjugate)",
@@ -657,51 +665,44 @@ def run(step_path: str,
 # convergence, as its own run section
 # ---------------------------------------------------------------------------
 
-def cantilever_convergence(sizes: Sequence[float], rd: RunDir,
-                           c: CANT.Cantilever, F: float, step: str) -> str:
-    """Verification check 1. Needs max_retries=0.
+def convergence_study(step_path: str, label: str, material: MaterialSpec,
+                      load_tags, fix_tags, force, sizes: Sequence[float],
+                      qoi: str = "load_point_displacement_mm",
+                      run_root: str = "runs", **kw) -> Tuple[str, object]:
+    """Solve the same case at three or more sizes and judge convergence.
 
-    With retries on, the R7 wall rule forces every requested size to the same
-    est_t/3 value, so four different sizes produce four identical meshes and
-    the study reports perfect convergence by construction. That is a defect in
-    R7, not a property of the geometry.
+    Works for any STEP case, not only the cantilever. Mesh retries are OFF:
+    a retry that resizes the mesh would make several requested sizes the same
+    mesh, which is how the old study reported perfect convergence by
+    construction. The judged size is the size MEASURED on each mesh, and the
+    verdict is Richardson extrapolation with the observed order, which FAILS
+    on identical meshes, oscillation, divergence (a singular peak stress) or
+    a fine-grid GCI above 2 percent.
     """
-    mat = MaterialSpec(E=c.E, nu=c.nu, name="validation steel")
+    import json as _json
+    from results_check import richardson
     pairs, rows = [], []
-    work = os.path.join(rd.sub("results"), "convergence")
-    os.makedirs(work, exist_ok=True)
-    for size in sizes:
-        tag = os.path.join(work, f"conv_s{size:g}")
-        with GeomSession(step) as ses:
-            fix = GF.extreme_planar_face(ses.catalogue, axis=0, side="min")
-            load = GF.extreme_planar_face(ses.catalogue, axis=0, side="max")
-            ses.add_selection("LOAD_FACE", load.tags, "load")
-            ses.add_selection("FIX_FACE", fix.tags, "constraint")
-            req = MeshRequest(step, mat, LoadCase("bending"),
-                              target_size=size, out_prefix=tag,
-                              solver="calculix")
-            r = run_mesh_agent(req, max_retries=0, session=ses)
-            GF.append_surfaces_inp(tag + ".inp",
-                                   GF.surface_facets(ses.selections))
-            write_case(tag + ".inp",
-                       CaseSpec(material=mat, solver="calculix",
-                                loads=[LoadSpec("LOAD_FACE", "force",
-                                                (0, 0, -F))],
-                                constraints=[ConstraintSpec("FIX_FACE",
-                                                            encastre=True)]),
-                       ses.node_sets, ses.selections, r.quality.n_nodes)
-        ok, info = _run_ccx(tag + ".inp")
-        if not ok:
-            rows.append(f"  size {size:6.3f}  SOLVE FAILED: {info}")
-            continue
-        uz = abs(min(v[2] for v in read_frd_disp(info).values()))
-        rows.append(f"  size {size:6.3f} mm   {r.quality.n_elements:8d} "
-                    f"elements   uz {uz:.6f} mm")
-        pairs.append((r.quality.char_size, uz))
-        print(rows[-1])
-    text = "\n".join(rows) + "\n\n" + convergence(pairs)
-    rd.set("convergence", [{"size": s, "uz": v} for s, v in pairs])
-    return text
+    for sz in sizes:
+        rd_i = run(step_path, f"{label}_conv{sz:g}", material, load_tags,
+                   fix_tags, force, solvers=("calculix",), target_size=sz,
+                   solve_with="calculix", mesh_retries=0,
+                   run_root=os.path.join(run_root, f"{label}_convergence"),
+                   **kw)
+        m = _json.load(open(os.path.join(rd_i.path, "run.json")))
+        v = m.get(qoi)
+        # representative size MEASURED on the mesh, (V / N)^(1/3), as in
+        # Celik et al. 2008. The requested size is what the mesher was asked
+        # for, not what it produced, and must not enter the ratio.
+        h = (m["volume_mm3"] / m["n_elements"]) ** (1.0 / 3.0)
+        rows.append(f"  requested {sz:7.3f}  measured h {h:7.3f} mm  "
+                    f"{m['n_elements']:8d} elements  {qoi} "
+                    f"{v if v is None else f'{v:.6g}'}")
+        if v is not None:
+            pairs.append((h, v))
+    verdict = richardson(pairs)
+    text = "\n".join(["MESH CONVERGENCE (Richardson, observed order)"] + rows
+                     + ["", f"  {verdict.verdict}: {verdict.detail}"])
+    return text, verdict
 
 
 # ---------------------------------------------------------------------------
@@ -737,8 +738,14 @@ def cantilever_run(solvers=ALL_SOLVERS, target_size=1.0, run_root="runs",
 
     if converge:
         print("\nmesh convergence study ...")
-        text = cantilever_convergence(converge, rd, c, F, step)
+        text, cv = convergence_study(
+            step, "cantilever", MaterialSpec(E=c.E, nu=c.nu,
+                                             name="validation steel"),
+            load_tags, fix_tags, (0.0, 0.0, -F), converge, run_root=run_root)
         rd.section("VERIFICATION CHECK 1: MESH CONVERGENCE", text)
+        rd.set("convergence", {"verdict": cv.verdict, "detail": cv.detail,
+                               "observed_order": cv.p,
+                               "extrapolated": cv.extrapolated})
     else:
         rd.action("Mesh convergence was NOT checked. Any agreement with the "
                   "reference may be discretisation error cancelling out. Add "
@@ -757,7 +764,9 @@ def main():
     ap.add_argument("--solve", default=None,
                     help="run this solver here (calculix only)")
     ap.add_argument("--converge", default=None,
-                    help="comma separated element sizes, cantilever only")
+                    help="comma separated element sizes (3 or more). "
+                         "Runs a Richardson study on the load-point "
+                         "displacement, cantilever or STEP")
     ap.add_argument("--size", type=float, default=None)
     ap.add_argument("--nlgeom", action="store_true")
     ap.add_argument("--runs", default="runs")
@@ -859,6 +868,14 @@ def main():
         target_size=a.size, nlgeom=a.nlgeom, solve_with=a.solve,
         asserted_mode=None if asserted == "not sure" else asserted,
         run_root=a.runs)
+    if conv:
+        text, cv = convergence_study(
+            a.step, os.path.splitext(os.path.basename(a.step))[0], mat,
+            load_tags, fix_tags, vec, conv, run_root=a.runs, goal=goal,
+            load_kind=load_kind, pressure=press, fix_dofs=dofs,
+            nlgeom=a.nlgeom,
+            asserted_mode=None if asserted == "not sure" else asserted)
+        print("\n" + text)
     return 0
 
 
