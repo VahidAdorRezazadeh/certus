@@ -132,8 +132,8 @@ Windows. A 10 mm cube, 4x4x4 C3D8, bottom face constrained, 100 N on the top fac
 | case | free rigid modes | exit | warnings | max abs U, top (mm) |
 |---|---|---|---|---|
 | bottom clamped (control) | 0 | 0 | 0 | 7.724e-05 |
-| bottom fixed x,y; load z | 1 | 0 | 0 | 8.069e+10 |
-| bottom fixed x,y; load x | 1 | 0 | 0 | 5.197e+10 |
+| bottom fixed x,y; load z | 3 | 0 | 0 | 8.069e+10 |
+| bottom fixed x,y; load x | 3 | 0 | 0 | 5.197e+10 |
 | bottom roller (z only); load z | 3 | 0 | 0 | 7.874e-05 |
 | bottom roller; load x | 3 | 0 | 0 | 3.652e+10 |
 
@@ -145,6 +145,11 @@ pre-solve rank test on the BC set.
 The same defect ships in model_agent.py: the menu option "fixed in the load
 direction only" writes FIX_FACE, 3, 3. On the real bracket under -Z it solved
 with no warning, max abs U 8.7e-05 mm, headline SOLVED.
+
+Correction, 23 Sep 2026: the x,y rows first said 1 free mode. The rank test
+(check 4) gives 3: fixing both in-plane DOFs on a plane face leaves Tz and
+the two tilts about in-plane axes free, since those move the face only
+out of its plane.
 
 F2. A load on a wrong but plausible face cannot be caught by the seven-check
 plan by construction (see R6). It belongs to the face catalogue.

@@ -25,10 +25,11 @@ Every run writes `runs/<stamp>_<label>/` with `REPORT.txt` and `run.json` (not t
 | `model_agent.py` | orchestrator and CLI |
 | `results_check.py`, `frdread.py` | read .frd results, compare to a closed form |
 | `cantilever.py` | the validation case and its closed form answer |
-| `invariants.py` | post-solve checks (to be rewritten to the seven-check plan) |
+| `invariants.py` | the seven checks: load vs intent, small strain, penetration, rigid-mode rank test, reversibility, rate independence, increment convergence |
+| `thickness.py` | member thickness and elements through it, measured on the mesh (R7) |
 | `verify_sets.py` | reads a written deck back: did each node set land on the intended face |
 | `run_dir.py` | run folder, REPORT.txt, run.json |
-| `test_chain.py`, `test_invariants.py` | tests |
+| `test_chain.py`, `test_checks.py`, `test_step3.py`, `test_step4.py`, `test_step6.py` | tests; each check has a seeded known-bad and a known-good case |
 | `part.step`, `part_spec.json` | reference bracket and its spec |
 
 `Literature/` and `Presentation/` hold the review and the deck.

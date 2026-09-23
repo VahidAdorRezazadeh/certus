@@ -1,36 +1,44 @@
 #!/usr/bin/env python3
 """
-invariants.py - verification check 4: reference-free physics invariants.
+invariants.py - the seven-check plan: checks that need NO reference answer.
 
 Where this sits among the checks:
 
     locking_check.py   pre-solve. Element formulation against load regime.
     verify_sets.py     pre-solve. Did the node set land on the face you meant.
     results_check.py   post-solve. Compare to a closed form answer.
-    invariants.py      post-solve. Checks that need NO reference answer.
+    invariants.py      pre and post-solve. The seven checks below.
 
-Why it exists. results_check.py needs a closed form solution. On a customer's
-bracket there is no closed form solution, no reference deck and no expert. But
-a family of physics checks needs none of those three. They are computable from
-the model and its own results:
+Each check passed seed, solve, verdict (test_checks.py): one seeded defect,
+CalculiX exits clean with no warning, the check returns FAIL with an owner
+and a lever; and a known-good case returns PASS.
 
-    INV1  global equilibrium   reactions balance the applied resultant
-    INV2  zero load            no load must produce no response
-    INV3  load scaling         doubling a linear load doubles the response
+    free, reads the existing result
+      1 LOAD vs INTENT        units, resultant, load on constrained DOFs,
+                              every part of the load face loaded
+      2 SMALL STRAIN          geometrically linear run deforms little
+      3 PENETRATION           contact does not interpenetrate
+    pre-solve, no extra job
+      4 ZERO-ENERGY MODES     rank test: BCs remove every rigid mode
+    gated extra solve, only when the declaration is at risk
+      5 REVERSIBILITY         declared elastic returns to zero on unload
+      6 RATE INDEPENDENCE     time x10 changes nothing
+      7 INCREMENT CONVERGENCE halving increments changes nothing
+
+Deleted as identities of any converged solve, do not rebuild: reactions
+against the deck's own resultant, zero load, load scaling (the former INV1 to
+INV3), contact force balance, non-negative plastic dissipation, incremental
+equilibrium under a Newton criterion.
 
 Deliberate design choice: this module reads a WRITTEN DECK and a solver
-output. It does not take a provenance object from the writer, and it does not
-import case_agent. That is not tidiness. A check that trusts the writer's own
+output. It does not import case_agent. A check that trusts the writer's own
 account of what it wrote cannot catch the writer being wrong, and it also
 cannot be pointed at a deck somebody else produced.
 
-WHAT THESE CHECKS DO NOT CATCH, measured not assumed. A load applied to a
-geometrically plausible but WRONG face still closes global equilibrium, still
-produces zero response at zero load, and still scales linearly. Measured on a
-cantilever: moving the load from the tip face to the bottom face changed tip
-deflection by 62 percent, and INV1, INV2 and INV3 all returned PASS. Input
-fidelity belongs to the face catalogue and the confirmation step. Do not sell
-this module as covering it.
+BLIND SPOT, measured: a load on a geometrically plausible but WRONG face
+passes. Moving a cantilever load from the tip to the bottom face changed tip
+deflection by 62 percent and every reference-free check passed. Input
+fidelity belongs to the face catalogue and the confirmation step.
 
 MEASURED SOLVER BEHAVIOUR, CalculiX 2.21, do not replace with recollection:
 
@@ -425,213 +433,583 @@ from results_check import ccx_outcome  # one convergence verdict for every calle
 
 
 # ---------------------------------------------------------------------------
+# Stated intent: what the engineer said, independent of the deck
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Intent:
+    """What the engineer stated. Every check compares the deck against this
+    or against physics; none trusts the writer's account of the deck."""
+    force: Optional[Tuple[float, float, float]] = None   # total, deck force unit
+    units: Optional[str] = None            # "N-mm-MPa" | "N-m-Pa"
+    E_GPa: Optional[float] = None          # stated Young's modulus
+    material_class: Optional[str] = None   # "elastic" | "elastic-plastic" | ...
+    rate_dependent: Optional[bool] = None
+    nlgeom: Optional[bool] = None
+    load_set: str = "LOAD_FACE"
+    contact_tol: Optional[float] = None    # allowed penetration, length unit
+
+
+_E_SCALE = {"N-mm-MPa": 1e3, "N-m-Pa": 1e9}          # GPa -> deck units
+_PATH_DEPENDENT = ("PLASTIC", "CYCLIC HARDENING", "CREEP", "DAMAGE")
+_RATE_CARDS = ("CREEP", "VISCOELASTIC")
+_RANK_BLIND = ("EQUATION", "MPC", "SPRING", "DASHPOT", "COUPLING",
+               "RIGID BODY", "CONTACT PAIR", "TIE", "GAP")
+
+
+# ---------------------------------------------------------------------------
 # The checks
 # ---------------------------------------------------------------------------
 
 @dataclass
 class Finding:
     rule: str
-    verdict: str            # PASS | FAIL | NOT EVALUATED
+    verdict: str            # PASS | FAIL | NOT EVALUATED | NOT NEEDED
     detail: str
     owner: str = ""
-    cure: str = ""
+    cure: str = ""          # the lever: what to change
 
     def render(self) -> str:
-        out = [f"{self.rule:22s} {self.verdict}", f"  {self.detail}"]
+        out = [f"{self.rule:26s} {self.verdict}", f"  {self.detail}"]
         if self.verdict == "FAIL" and self.cure:
             out.append(f"  owner: {self.owner}")
-            out.append(f"  cure : {self.cure}")
+            out.append(f"  lever: {self.cure}")
         return "\n".join(out)
 
 
-def check_equilibrium(deck: Deck, result: Dict[str, object],
-                      rtol: float = 1e-4) -> Finding:
-    """INV1. Reactions must balance the applied resultant."""
-    if deck.cloads_by_set:
-        return Finding(
-            "INV1_EQUILIBRIUM", "NOT EVALUATED",
-            f"deck applies *CLOAD by set name ({deck.cloads_by_set[0][0]}). "
-            "CalculiX applies that force to every node in the set, so the "
-            "intended resultant cannot be read from the deck. See M3.")
-    if deck.has_dload:
-        return Finding(
-            "INV1_EQUILIBRIUM", "NOT EVALUATED",
-            "deck contains *DLOAD. The applied resultant needs element face "
-            "areas, which this module does not compute yet.")
-    if not deck.cloads:
-        return Finding("INV1_EQUILIBRIUM", "NOT EVALUATED",
-                       "no *CLOAD lines in the deck")
-    rf = result.get("rf_total")
-    if rf is None:
-        return Finding("INV1_EQUILIBRIUM", "NOT EVALUATED",
-                       "no total reaction force in the .dat output")
-
-    applied = applied_resultant(deck)
-    on_bc = load_on_constrained(deck)
-
-    # The reference scale is the MAGNITUDE OF THE LOAD RESULTANT, not the
-    # per-component value. A component of the applied load is often exactly
-    # zero, and dividing a 1e-9 N numerical residual by a per-component floor
-    # turns rounding noise into a double-digit percentage. Measured: a
-    # verified-correct cantilever reported 6.3 percent imbalance in x and
-    # 16.6 percent in y purely from this, while z was correct to 1.6e-07.
-    scale = max((sum(v * v for v in applied)) ** 0.5,
-                (sum(v * v for v in rf)) ** 0.5, 1e-12)
-
-    lines, worst = [], 0.0
-    for i, ax in enumerate("xyz"):
-        # a load on a constrained node is reacted directly and is absent from
-        # RF, so it is subtracted here. See M1.
-        lhs = rf[i] - on_bc[i]
-        rhs = -applied[i]
-        rel = abs(lhs - rhs) / scale
-        worst = max(worst, rel)
-        lines.append(f"{ax}: RF {rf[i]:+.6g} - on-BC {on_bc[i]:+.6g} "
-                     f"= {lhs:+.6g}  vs applied {rhs:+.6g}  "
-                     f"(rel to |R|={scale:.4g}: {rel:.2e})")
-    return Finding(
-        "INV1_EQUILIBRIUM", "PASS" if worst <= rtol else "FAIL",
-        "; ".join(lines),
-        owner="load or constraint definition",
-        cure="check load direction, a dropped load component, a unit "
-             "inconsistency, or a constraint outside the reported set "
-             "absorbing part of the load")
-
-
-def check_zero_load(result: Dict[str, object], atol: float = 1e-9) -> Finding:
-    """INV2. No load must produce no response.
-
-    Refuses to evaluate if no load line was actually rescaled. A check whose
-    input was not perturbed cannot fail honestly, and a check that cannot fail
-    honestly is worse than no check.
-    """
-    if result.get("n_load_lines_modified") == 0:
-        return Finding("INV2_ZERO_LOAD", "NOT EVALUATED",
-                       "no load line in this deck could be rescaled, so the "
-                       "zero-load variant is identical to the base run")
-    if not result.get("frd"):
-        return Finding("INV2_ZERO_LOAD", "NOT EVALUATED",
-                       "zero-load run produced no .frd")
-    u = read_frd_disp(result["frd"])
-    if not u:
-        return Finding("INV2_ZERO_LOAD", "NOT EVALUATED",
-                       "no displacement block in the zero-load .frd")
-    worst = max(max(abs(v) for v in val) for val in u.values())
-    return Finding("INV2_ZERO_LOAD", "PASS" if worst <= atol else "FAIL",
-                   f"largest displacement with every load removed: "
-                   f"{worst:.3e} mm over {len(u)} nodes",
-                   owner="load definition or initial state",
-                   cure="a spurious load, a residual initial condition, or a "
-                        "prescribed nonzero displacement")
-
-
-def check_load_scaling(base: Dict[str, object], scaled: Dict[str, object],
-                       factor: float, rtol: float = 2e-5,
-                       max_nodes: int = 5000) -> Finding:
-    """INV3. Doubling a linear load doubles the response exactly.
-
-    rtol is set by OUTPUT PRECISION, not solver accuracy. See M2. Do not
-    tighten below 1e-5: the .frd stores E12.5.
-    """
-    if scaled.get("n_load_lines_modified") == 0:
-        return Finding("INV3_LOAD_SCALING", "NOT EVALUATED",
-                       "no load line in this deck could be rescaled, so the "
-                       "scaled variant is identical to the base run. A "
-                       "reported deviation of exactly 0.5 is this condition, "
-                       "not a physics finding.")
-    if not (base.get("frd") and scaled.get("frd")):
-        return Finding("INV3_LOAD_SCALING", "NOT EVALUATED",
-                       "one of the two runs produced no .frd")
-    ub, us = read_frd_disp(base["frd"]), read_frd_disp(scaled["frd"])
-    if not ub or not us:
-        return Finding("INV3_LOAD_SCALING", "NOT EVALUATED",
-                       "displacement field missing")
-    ref = max(max(abs(v) for v in val) for val in ub.values())
-    floor = ref * 1e-3          # ignore near-zero components, they are noise
-    worst, where = 0.0, None
-    for i, n in enumerate(ub):
-        if i >= max_nodes:
-            break
-        if n not in us:
-            continue
-        for k in range(3):
-            expect = ub[n][k] * factor
-            if abs(expect) < floor:
+def _cards(path: str) -> List[Tuple[str, Dict[str, str], List[str]]]:
+    """(keyword, options, data lines) for every card, comments dropped."""
+    out: List[Tuple[str, Dict[str, str], List[str]]] = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for ln in f.read().replace("\r\n", "\n").splitlines():
+            s = ln.strip()
+            if not s or s.startswith("**"):
                 continue
-            rel = abs(us[n][k] - expect) / abs(expect)
-            if rel > worst:
-                worst, where = rel, (n, "xyz"[k])
-    return Finding(
-        "INV3_LOAD_SCALING", "PASS" if worst <= rtol else "FAIL",
-        f"worst relative deviation {worst:.3e} at node {where} for a load "
-        f"factor of {factor} (tolerance {rtol:.0e}, set by .frd E12.5 "
-        f"precision)",
-        owner="material model or solution procedure",
-        cure="a nonlinear material, contact, or a large-displacement setting "
-             "is active in a run presented as linear")
+            if s.startswith("*"):
+                k, o = _kw(s)
+                out.append((k, o, []))
+            elif out:
+                out[-1][2].append(s)
+    return out
+
+
+def _has(cards, names) -> List[str]:
+    return sorted({k for k, _, _ in cards if k in names})
+
+
+def _nlgeom(cards) -> bool:
+    return any(k == "STEP" and ("NLGEOM" in o and o["NLGEOM"].upper()
+                                not in ("NO",)) for k, o, _ in cards)
+
+
+def _components(deck: Deck) -> List[set]:
+    """Connected bodies: node sets joined by shared elements."""
+    parent: Dict[int, int] = {}
+
+    def find(a):
+        while parent.setdefault(a, a) != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    for _t, conn in deck.elements.values():
+        if conn:
+            r = find(conn[0])
+            for n in conn[1:]:
+                parent[find(n)] = r
+    groups: Dict[int, set] = {}
+    for n in parent:
+        groups.setdefault(find(n), set()).add(n)
+    return list(groups.values())
+
+
+# ---- 1. load against stated intent (free) ---------------------------------
+
+def check_load_intent(deck: Deck, intent: Intent) -> Finding:
+    """The load in the deck, in the deck's units, is the load the engineer
+    stated, on the nodes they meant, and not on constrained nodes."""
+    R = "1 LOAD vs INTENT"
+    if intent.force is None or intent.units not in _E_SCALE:
+        return Finding(R, "NOT EVALUATED", "no stated force or unit system")
+    problems = []
+    cards = _cards(deck.path)
+    # units: the modulus must match the stated one in the stated units
+    if intent.E_GPa:
+        want = intent.E_GPa * _E_SCALE[intent.units]
+        for k, _o, data in cards:
+            if k == "ELASTIC" and data:
+                try:
+                    E = float(data[0].split(",")[0])
+                except ValueError:
+                    continue
+                if abs(E / want - 1.0) > 0.05:
+                    problems.append(
+                        f"*ELASTIC E = {E:g}, but {intent.E_GPa:g} GPa in "
+                        f"{intent.units} is {want:g} (factor {want / E:.3g})")
+    # resultant; a load by set name is applied to EVERY node (M3)
+    per_set = []
+    for name, dof, val in deck.cloads_by_set:
+        per_set.append((len(deck.resolve_nodes(name)), dof, val))
+    applied = list(applied_resultant(deck))
+    for n, dof, val in per_set:
+        if 1 <= dof <= 3:
+            applied[dof - 1] += n * val
+    fm = max(sum(v * v for v in intent.force) ** 0.5, 1e-30)
+    err = sum((applied[i] - intent.force[i]) ** 2 for i in range(3)) ** 0.5
+    if err > 1e-3 * fm:
+        problems.append(f"deck resultant ({applied[0]:.4g}, {applied[1]:.4g},"
+                        f" {applied[2]:.4g}) is not the stated "
+                        f"{tuple(intent.force)}")
+    # loads on constrained dofs are reacted directly and never reach the part
+    cn = constrained_nodes(deck)
+    shared = [(n, d) for n, d, v in deck.cloads if d in cn.get(n, ()) and v]
+    if shared:
+        problems.append(f"{len(shared)} load line(s) act on constrained "
+                        f"DOFs, e.g. node {shared[0][0]} dof {shared[0][1]}")
+    # every loaded node on the declared load set, every part of it loaded
+    lset = set(deck.nsets.get(intent.load_set.upper(), []))
+    if lset:
+        off = [n for n, _d, _v in deck.cloads if n not in lset]
+        if off:
+            problems.append(f"{len(off)} loaded node(s) are not on "
+                            f"{intent.load_set}")
+        sub = [c & lset for c in _face_patches(deck, lset)]
+        fn = {n: 0.0 for n in lset}
+        for n, d, v in deck.cloads:
+            if n in fn:
+                fn[n] += v * (intent.force[d - 1] / fm if 1 <= d <= 3 else 0)
+        if len(sub) > 1:
+            tot = sum(fn.values()) or 1e-30
+            nn = sum(len(p) for p in sub)
+            for p in sub:
+                share = sum(fn[n] for n in p) / tot
+                geo = len(p) / nn
+                if share < 0.1 * geo:
+                    c = [sum(deck.nodes[n][k] for n in p) / len(p)
+                         for k in range(3)]
+                    problems.append(
+                        f"the part of {intent.load_set} near ({c[0]:.1f}, "
+                        f"{c[1]:.1f}, {c[2]:.1f}) carries {share:.0%} of the "
+                        f"load against {geo:.0%} of the face")
+    if problems:
+        return Finding(R, "FAIL", "; ".join(problems), owner="case_agent",
+                       cure="rewrite the load and material cards from the "
+                            "stated intent and the deck's unit system")
+    return Finding(R, "PASS", f"resultant {tuple(round(v, 6) for v in applied)}"
+                   f" matches the stated load; units consistent; load on "
+                   f"{intent.load_set} only and on every part of it")
+
+
+def _face_patches(deck: Deck, nset: set) -> List[set]:
+    """Separate patches of a surface node set: nodes joined when they share
+    an element. Two lug holes are two patches; one hole is one."""
+    parent = {n: n for n in nset}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    for _t, conn in deck.elements.values():
+        on = [n for n in conn if n in parent]
+        for n in on[1:]:
+            parent[find(n)] = find(on[0])
+    g: Dict[int, set] = {}
+    for n in nset:
+        g.setdefault(find(n), set()).add(n)
+    return list(g.values())
+
+
+# ---- 2. small-strain validity (free) --------------------------------------
+
+def check_small_strain(deck: Deck, disp: Dict[int, Tuple[float, float, float]],
+                       intent: Intent, limit: float = 0.01) -> Finding:
+    """A run declared geometrically linear must deform little: max |U| below
+    1 percent of the model size. Abstains when NLGEOM is on."""
+    R = "2 SMALL STRAIN"
+    cards = _cards(deck.path)
+    if _nlgeom(cards) or intent.nlgeom:
+        return Finding(R, "NOT EVALUATED", "NLGEOM is on; nothing to check")
+    xs = list(deck.nodes.values())
+    L = max(max(p[k] for p in xs) - min(p[k] for p in xs) for k in range(3))
+    umax = max(sum(c * c for c in u) ** 0.5 for u in disp.values())
+    r = umax / L if L else 0.0
+    if r > limit:
+        return Finding(R, "FAIL", f"max |U| {umax:.4g} is {r:.1%} of the model "
+                       f"size {L:.4g} in a geometrically LINEAR run",
+                       owner="model_agent",
+                       cure="turn NLGEOM on, or confirm the load magnitude")
+    return Finding(R, "PASS", f"max |U| is {r:.2e} of the model size")
+
+
+# ---- 3. penetration (free) ------------------------------------------------
+
+def check_penetration(deck: Deck, disp, intent: Intent) -> Finding:
+    """Contacting surfaces do not interpenetrate past the tolerance. Master
+    surface approximated locally by a plane through its 4 nearest deformed
+    nodes, oriented away from the master body."""
+    R = "3 PENETRATION"
+    cards = _cards(deck.path)
+    pairs = [d for k, _o, d in cards if k == "CONTACT PAIR"]
+    if not pairs:
+        return Finding(R, "NOT NEEDED", "no contact pair in the deck")
+    surf: Dict[str, Tuple[str, List[str]]] = {}
+    for k, o, d in cards:
+        if k == "SURFACE":
+            surf[o.get("NAME", "").upper()] = (o.get("TYPE", "ELEMENT").upper(),
+                                               d)
+
+    def surf_nodes(name):
+        typ, data = surf.get(name.upper(), ("", []))
+        out = set()
+        for ln in data:
+            t = [x.strip() for x in ln.split(",") if x.strip()]
+            if typ == "NODE":
+                out |= set(deck.resolve_nodes(t[0]))
+            elif len(t) >= 2:
+                face = _FACES.get(t[1].upper())
+                els = deck.elsets.get(t[0].upper()) or \
+                    ([int(t[0])] if t[0].isdigit() else [])
+                for e in els:
+                    etype, conn = deck.elements[e]
+                    idx = face.get(len(conn)) if face else None
+                    out |= {conn[i] for i in idx} if idx else set(conn)
+        return out
+
+    def pos(n):
+        u = disp.get(n, (0.0, 0.0, 0.0))
+        return [deck.nodes[n][k] + u[k] for k in range(3)]
+    worst, h = 0.0, 1.0
+    for data in pairs:
+        for ln in data:
+            s_name, m_name = [x.strip() for x in ln.split(",")[:2]]
+            S, M = surf_nodes(s_name), surf_nodes(m_name)
+            if not S or not M:
+                return Finding(R, "NOT EVALUATED",
+                               f"could not resolve surfaces {s_name}/{m_name}")
+            body = next((c for c in _components(deck) if M & c), set())
+            bc = [sum(deck.nodes[n][k] for n in body) / len(body)
+                  for k in range(3)]
+            Mp = {n: pos(n) for n in M}
+            ml = list(Mp.values())
+            h = _mean_spacing(ml)
+            for n in S:
+                p = pos(n)
+                near = sorted(Mp.values(), key=lambda q: sum(
+                    (q[k] - p[k]) ** 2 for k in range(3)))[:4]
+                c, nrm = _plane(near)
+                if sum((c[k] - bc[k]) * nrm[k] for k in range(3)) < 0:
+                    nrm = [-v for v in nrm]
+                d = sum((p[k] - c[k]) * nrm[k] for k in range(3))
+                worst = max(worst, -d)
+    tol = intent.contact_tol if intent.contact_tol else 1e-3 * h
+    if worst > tol:
+        return Finding(R, "FAIL", f"max penetration {worst:.3g} exceeds the "
+                       f"tolerance {tol:.3g} "
+                       f"({'stated' if intent.contact_tol else '0.1% of the master node spacing'})",
+                       owner="model_agent",
+                       cure="raise the penalty stiffness or switch to a "
+                            "Lagrange contact formulation")
+    return Finding(R, "PASS", f"max penetration {worst:.3g} within {tol:.3g}")
+
+
+_FACES = {  # CalculiX face label -> corner node indices, by element size
+    "S1": {8: (0, 1, 2, 3), 20: (0, 1, 2, 3), 4: (0, 1, 2), 10: (0, 1, 2)},
+    "S2": {8: (4, 5, 6, 7), 20: (4, 5, 6, 7), 4: (0, 1, 3), 10: (0, 1, 3)},
+    "S3": {8: (0, 1, 5, 4), 20: (0, 1, 5, 4), 4: (1, 2, 3), 10: (1, 2, 3)},
+    "S4": {8: (1, 2, 6, 5), 20: (1, 2, 6, 5), 4: (0, 2, 3), 10: (0, 2, 3)},
+    "S5": {8: (2, 3, 7, 6), 20: (2, 3, 7, 6)},
+    "S6": {8: (3, 0, 4, 7), 20: (3, 0, 4, 7)},
+}
+
+
+def _mean_spacing(pts) -> float:
+    if len(pts) < 2:
+        return 1.0
+    s = 0.0
+    for p in pts[:50]:
+        s += min(sum((p[k] - q[k]) ** 2 for k in range(3)) ** 0.5
+                 for q in pts if q is not p)
+    return s / min(len(pts), 50)
+
+
+def _plane(pts):
+    import numpy as np
+    a = np.array(pts, dtype=float)
+    c = a.mean(axis=0)
+    _u, _s, vt = np.linalg.svd(a - c)
+    return list(c), list(vt[-1])
+
+
+# ---- 4. zero-energy modes: rank test on the BCs (pre-solve) ---------------
+
+_MODES = ("Tx", "Ty", "Tz", "Rx", "Ry", "Rz")
+
+
+def check_rigid_modes(deck: Deck) -> Finding:
+    """Every rigid-body mode of every connected body is removed by the BCs.
+
+    Rank of the constrained-DOF rows of the 6 rigid modes, per body.
+    CalculiX does not refuse a singular model (post-A F1: a roller solved
+    with exit 0 and a plausible answer), so this runs before the solve.
+    """
+    R = "4 ZERO-ENERGY MODES"
+    import numpy as np
+    blind = _has(_cards(deck.path), _RANK_BLIND)
+    if blind:
+        return Finding(R, "NOT EVALUATED", f"deck uses {', '.join(blind)}, "
+                       f"which the BC rank test does not model")
+    cn = constrained_nodes(deck)
+    bodies = _components(deck)
+    msgs = []
+    for body in bodies:
+        pts = [deck.nodes[n] for n in body]
+        c = [sum(p[k] for p in pts) / len(pts) for k in range(3)]
+        rows = []
+        for n in body:
+            for d in cn.get(n, ()):
+                if not 1 <= d <= 3:
+                    continue
+                x, y, z = (deck.nodes[n][k] - c[k] for k in range(3))
+                # displacement of dof d under the 6 unit rigid modes
+                r = {1: [1, 0, 0, 0, z, -y], 2: [0, 1, 0, -z, 0, x],
+                     3: [0, 0, 1, y, -x, 0]}[d]
+                rows.append(r)
+        A = np.array(rows, dtype=float) if rows else np.zeros((1, 6))
+        scale = max(1.0, float(np.abs(A).max()))
+        _u, s, vt = np.linalg.svd(A / scale, full_matrices=True)
+        rank = int((s > 1e-9 * max(1.0, s.max() if s.size else 1)).sum())
+        if rank < 6:
+            free = []
+            for v in vt[rank:]:
+                v = v / np.abs(v).max()
+                free.append(" + ".join(f"{v[i]:.2g}{_MODES[i]}"
+                                       for i in range(6) if abs(v[i]) > 1e-6))
+            msgs.append(f"body of {len(body)} nodes keeps {6 - rank} free "
+                        f"rigid mode(s): " + "; ".join(free))
+    if msgs:
+        return Finding(R, "FAIL", " | ".join(msgs), owner="case_agent",
+                       cure="constrain the listed modes, e.g. fix the "
+                            "in-plane DOFs on the support face")
+    return Finding(R, "PASS", f"all 6 rigid modes removed on "
+                   f"{len(bodies)} body(ies)")
+
+
+# ---- 5-7: gated extra solves ---------------------------------------------
+
+def _qoi(deck: Deck, disp) -> float:
+    """Load-point displacement sum(F.u)/|F|, or max |U| without loads."""
+    F = [0.0, 0.0, 0.0]
+    w = 0.0
+    for n, d, v in deck.cloads:
+        if 1 <= d <= 3 and n in disp:
+            F[d - 1] += v
+            w += v * disp[n][d - 1]
+    fm = sum(x * x for x in F) ** 0.5
+    if fm > 0:
+        return w / fm
+    return max(sum(c * c for c in u) ** 0.5 for u in disp.values())
+
+
+def _write(path, text):
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+def check_reversibility(deck: Deck, intent: Intent, workdir: str) -> Finding:
+    """A run declared elastic returns to zero on unloading. One unload step
+    appended; runs only when a path-dependent card is present."""
+    R = "5 REVERSIBILITY"
+    cards = _cards(deck.path)
+    pd = _has(cards, _PATH_DEPENDENT)
+    if intent.material_class != "elastic":
+        return Finding(R, "NOT EVALUATED",
+                       f"material class declared as "
+                       f"'{intent.material_class}', not elastic")
+    if not pd:
+        return Finding(R, "NOT NEEDED", "declared elastic and the deck has "
+                       "no path-dependent card, so unloading returns to zero "
+                       "by construction")
+    text = open(deck.path, encoding="utf-8", errors="replace").read()
+    step = next((f"*STEP{', NLGEOM' if _nlgeom(cards) else ''}, INC=1000"
+                 for _ in [0]))
+    unload = (f"{step}\n*STATIC\n0.1, 1., 1e-5, 0.1\n*CLOAD, OP=NEW\n*DLOAD, OP=NEW\n"
+              f"*NODE FILE\nU\n*END STEP\n")
+    p = _write(os.path.join(workdir, "chk_unload.inp"),
+               text.rstrip() + "\n" + unload)
+    r = solve(p)
+    if not r["converged"]:
+        return Finding(R, "NOT EVALUATED", f"unload run: {r['outcome']}")
+    blocks = __import__("frdread").read_frd_disp_blocks(r["frd"])
+    s1 = [b for b in blocks if b["step"] == 1]
+    loaded = max(sum(c * c for c in u) ** 0.5 for u in s1[-1]["disp"].values())
+    resid = max(sum(c * c for c in u) ** 0.5
+                for u in blocks[-1]["disp"].values())
+    rel = resid / loaded if loaded else 0.0
+    if rel > 1e-3:
+        return Finding(R, "FAIL", f"after unloading, {rel:.1%} of the peak "
+                       f"displacement remains ({resid:.4g}); cards present: "
+                       f"{', '.join(pd)}", owner="model_agent",
+                       cure="remove the path-dependent card, or declare the "
+                            "material elastic-plastic and read the result as "
+                            "such")
+    return Finding(R, "PASS", f"residual after unloading {rel:.1e} of peak "
+                   f"({', '.join(pd)} present but not activated)")
+
+
+def _scale_time(text: str, f: float) -> str:
+    """Multiply every step's time data (*STATIC / *VISCO) by f."""
+    out, want = [], False
+    for ln in text.split("\n"):
+        s = ln.strip()
+        if s.startswith("*") and not s.startswith("**"):
+            want = _kw(s)[0] in ("STATIC", "VISCO")
+            out.append(ln)
+            continue
+        if want and s:
+            t = [x.strip() for x in s.split(",")]
+            try:
+                t[:2] = [f"{float(v) * f:.6g}" for v in t[:2]]
+                if len(t) > 3 and t[3]:
+                    t[3] = f"{float(t[3]) * f:.6g}"
+                if len(t) > 2 and t[2]:
+                    t[2] = f"{float(t[2]) * f:.6g}"
+            except ValueError:
+                pass
+            out.append(", ".join(t))
+            want = False
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def check_rate(deck: Deck, intent: Intent, workdir: str, base_disp,
+               rtol: float = 0.01) -> Finding:
+    """Scaling step time by ten changes nothing in a run declared
+    rate-independent. Runs only when a rate-dependent card is present."""
+    R = "6 RATE INDEPENDENCE"
+    cards = _cards(deck.path)
+    rc = _has(cards, _RATE_CARDS)
+    if intent.rate_dependent:
+        return Finding(R, "NOT EVALUATED", "run declared rate-dependent")
+    if intent.rate_dependent is None:
+        return Finding(R, "NOT EVALUATED", "rate dependence not declared")
+    if not rc:
+        return Finding(R, "NOT NEEDED", "no rate-dependent card in the deck")
+    text = open(deck.path, encoding="utf-8", errors="replace").read()
+    p = _write(os.path.join(workdir, "chk_time10.inp"), _scale_time(text, 10.0))
+    r = solve(p)
+    if not r["converged"]:
+        return Finding(R, "NOT EVALUATED", f"time x10 run: {r['outcome']}")
+    q0 = _qoi(deck, base_disp)
+    q1 = _qoi(deck, read_frd_disp(r["frd"]))
+    rel = abs(q1 - q0) / max(abs(q0), 1e-30)
+    if rel > rtol:
+        return Finding(R, "FAIL", f"load-point displacement {q0:.4g} -> "
+                       f"{q1:.4g} ({rel:.1%}) when step time is x10; cards: "
+                       f"{', '.join(rc)}", owner="model_agent",
+                       cure="remove the rate-dependent card, or declare the "
+                            "run rate-dependent and give the real time scale")
+    return Finding(R, "PASS", f"time x10 changes the result by {rel:.1e}")
+
+
+def _halve_increments(text: str) -> str:
+    out, want = [], False
+    for ln in text.split("\n"):
+        s = ln.strip()
+        if s.startswith("*") and not s.startswith("**"):
+            want = _kw(s)[0] in ("STATIC", "VISCO")
+            out.append(ln)
+            continue
+        if want and s:
+            t = [x.strip() for x in s.split(",")]
+            try:
+                t[0] = f"{float(t[0]) / 2:.6g}"
+                if len(t) > 3 and t[3]:
+                    t[3] = f"{float(t[3]) / 2:.6g}"
+            except ValueError:
+                pass
+            out.append(", ".join(t))
+            want = False
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def check_increments(deck: Deck, workdir: str, base_disp,
+                     rtol: float = 0.01) -> Finding:
+    """Halving the increments of a nonlinear run does not move the quantity
+    of interest past tolerance. Abstains on linear steps."""
+    R = "7 INCREMENT CONVERGENCE"
+    cards = _cards(deck.path)
+    nonlin = _nlgeom(cards) or _has(cards, _PATH_DEPENDENT + _RATE_CARDS
+                                    + ("CONTACT PAIR", "HYPERELASTIC"))
+    if not nonlin:
+        return Finding(R, "NOT NEEDED", "linear steps only")
+    text = open(deck.path, encoding="utf-8", errors="replace").read()
+    p = _write(os.path.join(workdir, "chk_half.inp"), _halve_increments(text))
+    r = solve(p)
+    if not r["converged"]:
+        return Finding(R, "NOT EVALUATED", f"halved run: {r['outcome']}")
+    q0 = _qoi(deck, base_disp)
+    q1 = _qoi(deck, read_frd_disp(r["frd"]))
+    rel = abs(q1 - q0) / max(abs(q0), 1e-30)
+    if rel > rtol:
+        return Finding(R, "FAIL", f"load-point displacement {q0:.5g} -> "
+                       f"{q1:.5g} ({rel:.2%}) with increments halved",
+                       owner="solver driver",
+                       cure="reduce the increment size until halving it "
+                            "changes the result by less than 1 percent")
+    return Finding(R, "PASS", f"halving increments changes the result by "
+                   f"{rel:.1e}")
 
 
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
-def run_invariants(deck_path: str, workdir: Optional[str] = None,
-                   factor: float = 2.0, verbose: bool = True
-                   ) -> List[Finding]:
-    """Solve the deck, a zero-load copy and a scaled copy, then check.
-
-    Cost: two extra solves. On a workflow already dominated by solver time
-    that is a small marginal cost, which is the point.
-    """
+def run_checks(deck_path: str, intent: Intent, workdir: Optional[str] = None,
+               solved: Optional[Dict[str, object]] = None,
+               verbose: bool = True) -> List[Finding]:
+    """All seven. Check 4 before any solve; if it fails, nothing is solved.
+    Checks 1-3 read the existing result; 5-7 solve only when gated in."""
     deck = read_deck(deck_path)
     workdir = workdir or os.path.join(
-        os.path.dirname(os.path.abspath(deck_path)), "invariants")
+        os.path.dirname(os.path.abspath(deck_path)), "checks")
     os.makedirs(workdir, exist_ok=True)
-
+    f4 = check_rigid_modes(deck)
+    findings = [check_load_intent(deck, intent), f4]
+    if f4.verdict == "FAIL":
+        findings += [Finding(r, "NOT EVALUATED", "model not solved: check 4 "
+                             "failed") for r in ("2 SMALL STRAIN",
+                             "3 PENETRATION", "5 REVERSIBILITY",
+                             "6 RATE INDEPENDENCE",
+                             "7 INCREMENT CONVERGENCE")]
+    else:
+        base = solved or solve(deck_path)
+        if not base.get("converged"):
+            findings.append(Finding("SOLVE", "FAIL", str(base.get("outcome"))))
+        else:
+            disp = read_frd_disp(base["frd"])
+            findings += [check_small_strain(deck, disp, intent),
+                         check_penetration(deck, disp, intent),
+                         check_reversibility(deck, intent, workdir),
+                         check_rate(deck, intent, workdir, disp),
+                         check_increments(deck, workdir, disp)]
+    findings.sort(key=lambda f: f.rule)
     if verbose:
-        print(f"deck        : {deck_path}")
-        print(f"nodes       : {len(deck.nodes)}   elements: {len(deck.elements)}")
-        print(f"element type: {sorted(deck.element_types)}")
-        print(f"*CLOAD lines: {len(deck.cloads)}   by set: {len(deck.cloads_by_set)}"
-              f"   *DLOAD: {deck.has_dload}")
-        print(f"applied resultant : {applied_resultant(deck)}")
-        print(f"constrained nodes : {len(constrained_nodes(deck))}")
-        print(f"load on those     : {load_on_constrained(deck)}")
-        print()
-
-    runs = {}
-    for tag, scale in (("base", 1.0), ("zero", 0.0), ("scaled", factor)):
-        p, n_mod = make_variant(deck, os.path.join(workdir, f"inv_{tag}.inp"),
-                                load_scale=scale)
-        if verbose:
-            print(f"solving {tag} ... ({n_mod} load line(s) rescaled)",
-                  flush=True)
-        runs[tag] = solve(p)
-        runs[tag]["n_load_lines_modified"] = n_mod
-        if not runs[tag]["converged"] and verbose:
-            print(f"  {tag} did not converge")
-
-    findings = [
-        check_equilibrium(deck, runs["base"]),
-        check_zero_load(runs["zero"]),
-        check_load_scaling(runs["base"], runs["scaled"], factor),
-    ]
-    if verbose:
-        print()
-        print("REFERENCE-FREE INVARIANTS")
+        print("\nSEVEN-CHECK PLAN")
         print("=" * 60)
         for f in findings:
             print(f.render())
-        print()
-        print("NOTE: these checks do not detect a load placed on the wrong "
-              "face.\n      Measured: a 62 percent error in tip deflection "
-              "passed all three.")
+        print("\nBLIND SPOT, by construction: a load on a wrong but plausible "
+              "face\npasses all seven. That belongs to the face catalogue.")
     return findings
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: python invariants.py <path to solvable case.inp>")
-        sys.exit(1)
-    fs = run_invariants(sys.argv[1])
-    sys.exit(0 if all(f.verdict != "FAIL" for f in fs) else 2)
+        print("usage: python invariants.py deck.inp  (runs the checks that "
+              "need no stated intent)")
+        sys.exit(2)
+    run_checks(sys.argv[1], Intent())

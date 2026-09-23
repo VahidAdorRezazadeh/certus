@@ -466,6 +466,28 @@ def run(step_path: str,
                     "stress, so nothing can be compared against.")
 
     headline = "DECKS WRITTEN, NOT YET SOLVED"
+    # ---- the seven checks: stated intent, from the answers, not the deck
+    import invariants as INV
+    intent = INV.Intent(
+        force=tuple(force) if load_kind == "force" else None,
+        units="N-mm-MPa", E_GPa=material.E / 1000.0,
+        material_class=("elastic-plastic" if material.plastic_response_expected
+                        else "elastic"),
+        rate_dependent=False, nlgeom=nlgeom, load_set="LOAD_FACE")
+    checks: list = []
+    refused = None
+    if "calculix" in decks:
+        f4 = INV.check_rigid_modes(INV.read_deck(decks["calculix"]))
+        if f4.verdict == "FAIL":
+            refused = f4
+            rd.warn(f"REFUSED TO SOLVE. {f4.detail}. CalculiX would run this "
+                    f"with exit 0 and a plausible-looking answer.")
+            rd.action(f"{f4.cure}.")
+    if solve_with and refused is not None:
+        headline = (f"REFUSED. The supports leave free rigid-body modes "
+                    f"({refused.detail.split(': ', 1)[-1]}). Not solved.")
+        checks = [refused]
+        solve_with = None
     if solve_with:
         deck = decks[solve_with]
         print(f"\nsolving with {solve_with} ...")
@@ -531,6 +553,21 @@ def run(step_path: str,
             rd.warn(f"solve failed: {info}")
             headline = f"SOLVE FAILED: {info}"
 
+    if solve_with and headline.startswith("SOLVED"):
+        checks = INV.run_checks(decks[solve_with], intent,
+                                workdir=os.path.join(rd.path, "checks"),
+                                solved={"converged": True, "frd": info},
+                                verbose=False)
+    if checks:
+        rd.section("THE SEVEN CHECKS (deterministic, each passed "
+                   "seed/solve/verdict)",
+                   "\n".join(f.render() for f in checks)
+                   + "\n\nBlind spot: a load on a wrong but plausible face "
+                     "passes all seven.")
+        rd.set("checks", [{"rule": f.rule, "verdict": f.verdict,
+                           "detail": f.detail, "owner": f.owner,
+                           "lever": f.cure} for f in checks])
+
     # ---- trust verdict ---------------------------------------------------
     # result_trustworthy is only as wide as what was checked. It says which
     # checks it covers and which it does not, so a True is never read as
@@ -538,6 +575,12 @@ def run(step_path: str,
     blockers = [{"source": "locking", "id": f.rule_id,
                  "severity": f.severity.value}
                 for f in lreport.actionable()]
+    for f in checks:
+        if f.verdict == "FAIL":
+            blockers.append({"source": "seven checks",
+                             "id": f.rule.split()[0] + "_" +
+                             "_".join(f.rule.split()[1:3]),
+                             "severity": "FAIL", "detail": f.detail})
     if clashes:
         blockers.append({"source": "load case", "id": "MODE_MISMATCH",
                          "severity": "MODERATE",
@@ -549,12 +592,14 @@ def run(step_path: str,
                  if f.severity.value == "BLOCKED"]
     checked = [("locking rules R1-R7" if not abstained else
                 "locking rules except " + ", ".join(abstained)),
-               "load case consistency"]
+               "load case consistency"] + \
+        [f"check {f.rule}" for f in checks if f.verdict in ("PASS", "FAIL")]
     not_checked = [f"{r} (abstained, input not measurable)"
-                   for r in abstained] + ["constraint sufficiency (rigid body modes)",
-                   "overconstraint (node count heuristic only, "
-                   "reported as a caveat)",
-                   "load against stated intent", "mesh convergence"]
+                   for r in abstained] + \
+        [f"check {f.rule} ({f.verdict.lower()})" for f in checks
+         if f.verdict == "NOT EVALUATED"] + \
+        ["overconstraint (node count heuristic only, reported as a caveat)",
+         "mesh convergence"]
     if blockers:
         ids = ", ".join(f"{b['id']} {b['severity']}" for b in blockers)
         if solved:
