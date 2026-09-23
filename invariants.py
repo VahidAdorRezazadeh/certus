@@ -964,6 +964,61 @@ def check_increments(deck: Deck, workdir: str, base_disp,
                    f"{rel:.1e}")
 
 
+# ---- constraint realism (Step 8), post-solve, from reactions --------------
+
+def check_support_reactions(deck: Deck, frd_path: str, fix_set: str,
+                            tension_limit: float = 0.05,
+                            mu: float = 0.3) -> Finding:
+    """Does a fully fixed support act like a surface the part rests on?
+
+    A clamp on a whole face can PULL the part (tensile normal reaction) and
+    can hold any sideways load (unlimited friction). A bolted plate on a frame
+    does neither between its bolts. Measured from the solved reactions on the
+    support face, oriented by the face's own plane:
+      tension share  = sum max(0, R.n) / sum |R.n|   (n outward from the part)
+      friction ratio = sum |R_t| / sum of compressive |R.n|
+    FAIL if tension share > 5% or friction ratio > mu (0.3 by default).
+    The support was stated as fixed, so this is reported as a caveat on
+    the idealisation, with the numbers, not as a deck error.
+    """
+    R = "8 SUPPORT REACTIONS"
+    import numpy as np
+    from frdread import read_frd_field
+    nodes = sorted(set(deck.nsets.get(fix_set.upper(), [])))
+    if len(nodes) < 3:
+        return Finding(R, "NOT EVALUATED", f"no node set {fix_set}")
+    try:
+        rf = read_frd_field(frd_path, "FORC")
+    except RuntimeError:
+        return Finding(R, "NOT EVALUATED", "no RF field in the .frd")
+    P = np.array([deck.nodes[n] for n in nodes])
+    c = P.mean(axis=0)
+    _u, s, vt = np.linalg.svd(P - c)
+    span = max(s[0], 1e-30)
+    if s[-1] / span > 1e-3:
+        return Finding(R, "NOT EVALUATED", f"{fix_set} is not planar")
+    n = vt[-1]
+    allp = np.array(list(deck.nodes.values()))
+    if np.dot(allp.mean(axis=0) - c, n) > 0:
+        n = -n                      # outward from the part
+    Rv = np.array([rf.get(k, (0.0, 0.0, 0.0)) for k in nodes])
+    rn = Rv @ n
+    rt = np.linalg.norm(Rv - np.outer(rn, n), axis=1)
+    tens = rn[rn > 0].sum() / max(np.abs(rn).sum(), 1e-30)
+    comp = -rn[rn < 0].sum()
+    fric = rt.sum() / max(comp, 1e-30)
+    ftxt = (f"{fric:.2f}" if comp > 1e-9 * max(np.abs(rn).sum(), 1e-30)
+            else "unbounded (no compressive reaction)")
+    detail = (f"on {fix_set}: {tens:.0%} of the normal reaction is the clamp "
+              f"PULLING the part; tangential/compressive reaction "
+              f"{ftxt} (limit {mu})")
+    if tens > tension_limit or fric > mu:
+        return Finding(R, "FAIL", detail, owner="case_agent",
+                       cure="support only the bolt or washer footprints, or "
+                            "model contact with the frame and bolt preload")
+    return Finding(R, "PASS", detail)
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------

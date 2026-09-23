@@ -90,13 +90,21 @@ def read_frd_disp(path: str, which: str = "last"
     return (blocks[-1] if which == "last" else blocks[0])["disp"]
 
 
-def read_frd_disp_blocks(path: str) -> List[dict]:
-    """Every DISP block as {"step", "inc", "time", "disp"}, in file order."""
+def read_frd_field(path: str, name: str = "FORC", which: str = "last"
+                   ) -> Dict[int, Tuple[float, float, float]]:
+    """A 3-component nodal field block (DISP, FORC = reaction forces RF)."""
+    blocks = read_frd_disp_blocks(path, name)
+    return (blocks[-1] if which == "last" else blocks[0])["disp"]
+
+
+def read_frd_disp_blocks(path: str, name: str = "DISP") -> List[dict]:
+    """Every block of a 3-component nodal field as {"step", "inc", "time",
+    "disp"}, in file order. name = "DISP" or "FORC"."""
     raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
     heads = [i for i, l in enumerate(raw)
-             if "DISP" in l and l.strip().startswith("-4")]
+             if l.strip().startswith("-4") and l.split()[1] == name]
     if not heads:
-        raise RuntimeError(f"no displacement block found in {path}")
+        raise RuntimeError(f"no {name} block found in {path}")
     out = []
     for h in heads:
         step = inc = None

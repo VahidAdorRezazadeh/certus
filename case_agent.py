@@ -326,17 +326,18 @@ def check_overconstraint(node_sets: Dict[str, List[int]],
         if frac >= OVERCONSTRAINT_SEVERE and full:
             out.append(
                 f"'{c.selection}' fixes ALL translations on {frac*100:.1f}% "
-                f"of the model ({len(tags)} nodes). This will over-stiffen "
-                f"the part and put a false stress concentration at the "
-                f"constraint edge. Any comparison to a hand calculation will "
-                f"disagree for this reason and not because of the mesh.")
+                f"of the model ({len(tags)} nodes). A node count cannot say "
+                f"whether that is realistic; the support reaction check after "
+                f"the solve measures whether the clamp pulls on the part or "
+                f"demands more friction than a real joint gives.")
         elif frac >= OVERCONSTRAINT_WARN and full:
             out.append(
                 f"'{c.selection}' fixes all translations on {frac*100:.1f}% "
                 f"of the model. Check this is the intended support.")
     if not constraints:
-        out.append("NO CONSTRAINTS. The model has rigid body motion and will "
-                   "not solve.")
+        out.append("NO CONSTRAINTS. The model has free rigid-body modes. "
+                   "CalculiX would still run it (measured, F1); check 4 "
+                   "refuses it before the solve.")
     return out
 
 

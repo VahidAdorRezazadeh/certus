@@ -558,6 +558,17 @@ def run(step_path: str,
                                 workdir=os.path.join(rd.path, "checks"),
                                 solved={"converged": True, "frd": info},
                                 verbose=False)
+        # Step 8: is a fully fixed support acting like a real seat? Reported
+        # as a caveat on the stated idealisation, never silently.
+        sup = INV.check_support_reactions(
+            INV.read_deck(decks[solve_with]), info, "FIX_FACE")
+        rd.section("SUPPORT REACTIONS (constraint realism)", sup.render())
+        rd.set("support_reactions", {"verdict": sup.verdict,
+                                     "detail": sup.detail})
+        if sup.verdict == "FAIL":
+            rd.warn("The fixed support does not behave like a surface the "
+                    "part rests on: " + sup.detail + ". The result is stiffer "
+                    "than a bolted joint.")
     if checks:
         rd.section("THE SEVEN CHECKS (deterministic, each passed "
                    "seed/solve/verdict)",
@@ -587,6 +598,9 @@ def run(step_path: str,
                          "detail": clashes[0]})
     caveats = [{"source": "case agent", "detail": w}
                for w in creport.warnings]
+    if rd.meta.get("support_reactions", {}).get("verdict") == "FAIL":
+        caveats.append({"source": "support reactions",
+                        "detail": rd.meta["support_reactions"]["detail"]})
     solved = headline.startswith("SOLVED")
     abstained = [f.rule_id for f in lreport.findings
                  if f.severity.value == "BLOCKED"]
