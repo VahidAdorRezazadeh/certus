@@ -12,3 +12,5 @@ spooles.out
 *.step
 !part.step
 .vscode/
+.claude/
+Demo/
