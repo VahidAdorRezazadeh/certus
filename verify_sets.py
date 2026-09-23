@@ -18,30 +18,16 @@ from collections import OrderedDict
 
 
 def read_inp(path):
-    nodes, nsets = {}, OrderedDict()
-    mode, cur = None, None
-    with open(path) as f:
-        for line in f:
-            s = line.strip()
-            if not s or s.startswith("**"):
-                continue
-            if s.startswith("*"):
-                up = s.upper()
-                if up.startswith("*NODE"):
-                    mode, cur = "node", None
-                elif up.startswith("*NSET"):
-                    mode = "nset"
-                    cur = s.split("NSET=")[1].split(",")[0].strip()
-                    nsets[cur] = []
-                else:
-                    mode, cur = None, None
-                continue
-            parts = [p.strip() for p in s.split(",") if p.strip()]
-            if mode == "node" and len(parts) >= 4:
-                nodes[int(parts[0])] = tuple(float(x) for x in parts[1:4])
-            elif mode == "nset" and cur:
-                nsets[cur].extend(int(p) for p in parts)
-    return nodes, nsets
+    """Nodes and node sets from the written deck.
+
+    Uses the one deck parser in invariants.py, so GENERATE, set-of-set
+    references and continuation lines are handled once, the same way for
+    every check. The previous local parser read "1, 100, 1" under
+    *NSET, GENERATE as three node ids.
+    """
+    from invariants import read_deck
+    d = read_deck(path)
+    return d.nodes, OrderedDict((k, v) for k, v in d.nsets.items())
 
 
 def classify(pts):

@@ -208,6 +208,16 @@ def read_deck(path: str) -> Deck:
                     d.elsets[opts["ELSET"].upper()].append(pend_id)
                 pend_id, pend_conn = None, []
 
+        elif mode in ("ELSET", "NSET") and "GENERATE" in opts:
+            # first, last[, increment]. Without this, a GENERATE line is read
+            # as three member ids and the set silently holds the wrong nodes.
+            name = opts.get(mode, "").upper()
+            a = [int(float(t)) for t in toks[:3]]
+            first, last = a[0], a[1] if len(a) > 1 else a[0]
+            inc = a[2] if len(a) > 2 and a[2] != 0 else 1
+            target = d.elsets if mode == "ELSET" else d.nsets
+            target[name] += list(range(first, last + 1, inc))
+
         elif mode == "ELSET":
             name = opts.get("ELSET", "").upper()
             for t in toks:
@@ -313,10 +323,15 @@ def make_variant(deck: Deck, out_path: str, load_scale: float = 1.0,
             toks = [t.strip() for t in s.split(",") if t.strip()]
             # *CLOAD  : node, dof, value
             # *DLOAD  : element or elset, face label (e.g. P3), magnitude
+            # *DLOAD GRAV: elset, GRAV, g, nx, ny, nz
+            # *DLOAD CENTRIF: elset, CENTRIF, omega^2, point, axis
+            # Only the magnitude (field 3) scales. Every field after it is
+            # kept: dropping the direction turns GRAV into a malformed card.
             if len(toks) >= 3:
                 try:
-                    out.append(f"{toks[0]}, {toks[1]}, "
-                               f"{float(toks[2]) * load_scale:.10g}")
+                    mag = float(toks[2]) * load_scale
+                    out.append(", ".join(toks[:2] + [f"{mag:.10g}"]
+                                         + toks[3:]))
                     n_mod += 1
                     continue
                 except ValueError:
@@ -351,17 +366,29 @@ def solve(deck_path: str, timeout: int = 7200) -> Dict[str, object]:
                        text=True, timeout=timeout)
     dat = os.path.join(workdir, job + ".dat")
     frd = os.path.join(workdir, job + ".frd")
+    # A non-empty .frd is NOT convergence: a run that stops with "increment
+    # size smaller than minimum" still writes partial results. Measured.
+    outcome = ccx_outcome(r.stdout + r.stderr, r.returncode,
+                          os.path.join(workdir, job), deck_path)
     return {
         "job": job,
-        "converged": os.path.exists(frd) and os.path.getsize(frd) > 0,
-        "rf_total": read_total_force(dat) if os.path.exists(dat) else None,
+        "converged": outcome.converged,
+        "outcome": outcome.reason,
+        "rf_total": read_total_force(dat, "NCERTUS_BC")
+        if os.path.exists(dat) else None,
         "frd": frd if os.path.exists(frd) else None,
         "stdout": r.stdout,
     }
 
 
-def read_total_force(path: str) -> Optional[Tuple[float, float, float]]:
-    """Total reaction force from a .dat file.
+def read_total_force(path: str, set_name: Optional[str] = None
+                     ) -> Optional[Tuple[float, float, float]]:
+    """Total reaction force from a .dat file, for ONE named node set.
+
+    set_name selects the block by the set named in its header. Without it the
+    reader takes whatever total-force block comes last, which is the wrong
+    set as soon as a deck prints reactions for more than one set. With it,
+    a missing set returns None instead of another set's numbers.
 
     Returns the LAST block, not the first. A multi-increment run writes one
     block per increment, and the first one is at a fraction of the load.
@@ -374,7 +401,12 @@ def read_total_force(path: str) -> Optional[Tuple[float, float, float]]:
         for ln in f:
             low = ln.lower()
             if "for set" in low and "time" in low:
-                mode = "rf" if "total force" in low else None
+                mode = None
+                if "total force" in low:
+                    name = low.split("for set", 1)[1].split("and time")[0]
+                    if set_name is None or \
+                            name.strip() == set_name.strip().lower():
+                        mode = "rf"
                 continue
             if mode == "rf" and ln.strip():
                 try:
@@ -389,6 +421,7 @@ def read_total_force(path: str) -> Optional[Tuple[float, float, float]]:
 
 
 from frdread import read_frd_disp  # width-detecting .frd reader, shared so there is one copy
+from results_check import ccx_outcome  # one convergence verdict for every caller
 
 
 # ---------------------------------------------------------------------------

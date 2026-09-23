@@ -27,6 +27,7 @@ implemented here, so an Abaqus run must be compared by hand until it is.
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
+import os
 import re
 import sys
 
@@ -119,3 +120,82 @@ def convergence(pairs: List[Tuple[float, float]]) -> str:
 if __name__ == "__main__":
     frd, ref = sys.argv[1], float(sys.argv[2])
     print(check_cantilever(frd, ref).render())
+
+
+# ---------------------------------------------------------------------------
+# did the solve finish the step it was asked to do
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CcxOutcome:
+    converged: bool
+    reason: str
+
+
+def _step_period(deck_path: str) -> Optional[float]:
+    """Time period of the LAST *STATIC step: 2nd field of its data line,
+    1.0 when the line is empty or absent (CalculiX default)."""
+    if not deck_path or not os.path.exists(deck_path):
+        return None
+    period, want = None, False
+    with open(deck_path, encoding="utf-8", errors="replace") as f:
+        for ln in f:
+            s = ln.strip()
+            if not s or s.startswith("**"):
+                continue
+            if s.startswith("*"):
+                if want:            # *STATIC with no data line
+                    period = 1.0
+                want = s.upper().startswith("*STATIC")
+                continue
+            if want:
+                toks = [t.strip() for t in s.split(",")]
+                try:
+                    period = float(toks[1]) if len(toks) > 1 and toks[1] \
+                        else 1.0
+                except ValueError:
+                    period = 1.0
+                want = False
+    return period
+
+
+def _sta_last_step_time(sta_path: str) -> Optional[float]:
+    if not os.path.exists(sta_path):
+        return None
+    last = None
+    with open(sta_path, encoding="utf-8", errors="replace") as f:
+        for ln in f:
+            toks = ln.split()
+            if len(toks) >= 7 and toks[0].isdigit():
+                try:
+                    last = float(toks[5])
+                except ValueError:
+                    pass
+    return last
+
+
+def ccx_outcome(log: str, returncode: int, job_base: str,
+                deck_path: Optional[str] = None,
+                rtol: float = 1e-6) -> CcxOutcome:
+    """One verdict on whether CalculiX finished what it was asked to do.
+
+    All must hold: exit code 0, "Job finished" printed, no *ERROR line, and,
+    when a .sta file exists, the last converged increment reached the step
+    period of the last *STATIC step. A non-empty .frd proves nothing: a run
+    that aborts with "increment size smaller than minimum" still writes one.
+    """
+    if returncode != 0:
+        return CcxOutcome(False, f"ccx exit code {returncode}")
+    errs = [l.strip() for l in log.splitlines() if "*ERROR" in l.upper()]
+    if errs:
+        return CcxOutcome(False, errs[0])
+    if "job finished" not in log.lower():
+        return CcxOutcome(False, "ccx did not print 'Job finished'")
+    t_end = _sta_last_step_time(job_base + ".sta")
+    period = _step_period(deck_path) if deck_path else None
+    if t_end is not None and period is not None and \
+            t_end < period * (1 - rtol):
+        return CcxOutcome(False, f"step stopped at time {t_end:g} of "
+                                 f"{period:g}")
+    return CcxOutcome(True, "finished, step period reached"
+                      if t_end is not None else "finished (no .sta)")

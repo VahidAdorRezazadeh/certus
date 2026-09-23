@@ -41,7 +41,8 @@ from locking_check import MaterialSpec, LoadCase, check_locking
 from case_agent import (CaseSpec, LoadSpec, ConstraintSpec, write_case,
                         reconcile_load_case, compute_dominant_mode,
                         geometry_mode_inputs)
-from results_check import read_frd_disp, convergence, Comparison
+from results_check import (read_frd_disp, convergence, Comparison,
+                           ccx_outcome)
 from run_dir import RunDir
 import cantilever as CANT
 
@@ -270,10 +271,9 @@ def _run_ccx(deck_path: str, timeout: int = 3600) -> Tuple[bool, str]:
     log = (p.stdout or "") + (p.stderr or "")
     with open(base + ".log", "w") as f:
         f.write(log)
-    ok = os.path.exists(base + ".frd") and "Job finished" in log
-    if not ok:
-        err = [l for l in log.splitlines() if "ERROR" in l.upper()]
-        return False, "; ".join(err[:3]) or "ccx did not finish"
+    out = ccx_outcome(log, p.returncode, base, deck_path)
+    if not out.converged or not os.path.exists(base + ".frd"):
+        return False, out.reason if not out.converged else "no .frd written"
     return True, base + ".frd"
 
 
