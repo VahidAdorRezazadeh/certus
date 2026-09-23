@@ -39,7 +39,8 @@ from geom_session import GeomSession
 from mesh_agent import MeshRequest, run_mesh_agent
 from locking_check import MaterialSpec, LoadCase, check_locking
 from case_agent import (CaseSpec, LoadSpec, ConstraintSpec, write_case,
-                        reconcile_load_case)
+                        reconcile_load_case, compute_dominant_mode,
+                        geometry_mode_inputs)
 from results_check import read_frd_disp, convergence, Comparison
 from run_dir import RunDir
 import cantilever as CANT
@@ -295,6 +296,7 @@ def run(step_path: str,
         nlgeom: bool = False,
         reference: Optional[dict] = None,
         solve_with: Optional[str] = None,
+        asserted_mode: Optional[str] = None,
         run_root: str = "runs") -> RunDir:
 
     rd = RunDir(label, root=run_root, solvers=tuple(solvers), meta={
@@ -315,7 +317,30 @@ def run(step_path: str,
         ses.add_selection("LOAD_FACE", load_tags, "load")
         ses.add_selection("FIX_FACE", fix_tags, "constraint")
 
-        assumed = LoadCase("bending")
+        # ---- dominant mode BEFORE meshing, because the mesh retry lever
+        # depends on it. Order of authority: computed from the geometry and
+        # the force; else asserted by the user; else an ASSUMED default that
+        # is reported as such. Never labelled as something the user said.
+        pre = None
+        if load_kind == "force" and any(abs(c) > 0 for c in force):
+            lc, cc, body = geometry_mode_inputs(load_tags, fix_tags)
+            pre = compute_dominant_mode([lc], tuple(force), [cc], body)
+        if pre is not None and pre.mode != "unknown":
+            mode_src, mode0 = "COMPUTED BEFORE MESHING", pre.mode
+        elif asserted_mode:
+            mode_src, mode0 = "ASSERTED", asserted_mode
+        else:
+            mode_src, mode0 = "ASSUMED", "bending"
+            rd.warn("The dominant mode could not be computed (no force "
+                    "resultant) and was not stated. The mesh was sized for "
+                    "'bending', the conservative default because it enables "
+                    "the shear locking rules. This is an assumption, not a "
+                    "finding.")
+        rd.section("DOMINANT MODE USED TO SIZE THE MESH",
+                   f"  source  {mode_src}\n  mode    {mode0}"
+                   + (f"\n\n{pre.render()}" if pre is not None else ""))
+        rd.set("mode_for_meshing", {"mode": mode0, "source": mode_src})
+        assumed = LoadCase(mode0)
         req = MeshRequest(step_path, material, assumed,
                           target_size=target_size,
                           out_prefix=rd.prefix("mesh", "mesh"),
@@ -363,7 +388,7 @@ def run(step_path: str,
         for wmsg in creport.warnings:
             rd.warn(wmsg)
 
-        clashes = reconcile_load_case(creport.mode, assumed)
+        clashes = reconcile_load_case(creport.mode, assumed, mode_src)
         for c in clashes:
             rd.warn(c)
             print(f"\n  ! {c}")
@@ -442,31 +467,43 @@ def run(step_path: str,
             rd.warn(f"solve failed: {info}")
             headline = f"SOLVE FAILED: {info}"
 
-    # ---- unresolved physics findings must reach the headline -----------
-    # A run that computed a MODERATE or worse locking finding, never cleared
-    # it, and then published "SOLVED" is asserting a confidence it did not
-    # earn. The numbers may still be useful, but the headline must carry the
-    # qualification, and run.json must carry it in machine readable form so a
-    # benchmark table can aggregate it.
-    unresolved = []
-    try:
-        unresolved = lreport.actionable() if lreport else []
-    except NameError:
-        unresolved = []
-    if unresolved:
-        ids = ", ".join(f"{f.rule_id} {f.severity.value}" for f in unresolved)
-        if headline.startswith("SOLVED"):
-            headline = (f"SOLVED, RESULT NOT TRUSTWORTHY. Unresolved physics "
+    # ---- trust verdict ---------------------------------------------------
+    # result_trustworthy is only as wide as what was checked. It says which
+    # checks it covers and which it does not, so a True is never read as
+    # "verified". None means no solve result exists to judge.
+    blockers = [{"source": "locking", "id": f.rule_id,
+                 "severity": f.severity.value}
+                for f in lreport.actionable()]
+    if clashes:
+        blockers.append({"source": "load case", "id": "MODE_MISMATCH",
+                         "severity": "MODERATE",
+                         "detail": clashes[0]})
+    caveats = [{"source": "case agent", "detail": w}
+               for w in creport.warnings]
+    solved = headline.startswith("SOLVED")
+    checked = ["locking rules R1-R7", "load case consistency"]
+    not_checked = ["constraint sufficiency (rigid body modes)",
+                   "overconstraint (node count heuristic only, "
+                   "reported as a caveat)",
+                   "load against stated intent", "mesh convergence"]
+    if blockers:
+        ids = ", ".join(f"{b['id']} {b['severity']}" for b in blockers)
+        if solved:
+            headline = (f"SOLVED, RESULT NOT TRUSTWORTHY. Unresolved "
                         f"finding(s): {ids}")
-        rd.warn(f"The locking check reported {ids} and it was never cleared. "
-                f"Every number in this run carries that bias.")
+        rd.warn(f"Unresolved finding(s) {ids}. They were never cleared.")
         rd.action(f"Resolve {ids} before quoting any number from this run. "
                   f"See the cure availability table above: a cure that no "
                   f"available solver offers is a stack decision, not a fix.")
-    rd.set("unresolved_findings",
-           [{"rule": f.rule_id, "severity": f.severity.value}
-            for f in unresolved])
-    rd.set("result_trustworthy", not unresolved)
+    elif solved:
+        headline = headline.rstrip(". ") + ". " + ("Checked: " + ", ".join(checked) + ". Not checked: "
+                     + ", ".join(not_checked) + ".")
+    verdict = (not blockers) if solved else None
+    rd.set("result_trustworthy", verdict)
+    rd.set("trust", {"verdict": verdict, "blockers": blockers,
+                     "caveats": caveats, "checked": checked,
+                     "not_checked": not_checked})
+    rd.set("unresolved_findings", blockers)
 
     rd.set("headline_verdict", headline)
     if not solve_with:
@@ -628,7 +665,7 @@ def main():
                   "pressure on the face (MPa)"], 0)
     load_kind = "force" if kind.startswith("concentrated") else "pressure"
 
-    vec, press = (0.0, 0.0, 0.0), 0.0
+    vec, press, asserted = (0.0, 0.0, 0.0), 0.0, "not sure"
     if load_kind == "force":
         axis = _pick("Which direction is the load?",
                      ["-Z", "+Z", "-Y", "+Y", "-X", "+X"], 0)
@@ -640,8 +677,12 @@ def main():
         press = _number("How big is the pressure, in MPa (positive pushes "
                         "INTO the surface)", 1.0)
         print("  -> a pressure has no single resultant direction, so the "
-              "dominant mode cannot be derived from it. It will be reported "
-              "as not computed rather than guessed.")
+              "dominant mode cannot be derived from it here.")
+        asserted = _pick("What deformation dominates? (it sizes the mesh; "
+                         "'not sure' uses bending and reports it as an "
+                         "assumption)",
+                         ["not sure", "bending", "axial", "shear", "torsion"],
+                         0)
 
     hold = _pick("How is the constraint face held?",
                  ["fully fixed (all translations)",
@@ -668,6 +709,7 @@ def main():
         load_tags, fix_tags, vec, goal=goal, solvers=solvers,
         load_kind=load_kind, pressure=press, fix_dofs=dofs,
         target_size=a.size, nlgeom=a.nlgeom, solve_with=a.solve,
+        asserted_mode=None if asserted == "not sure" else asserted,
         run_root=a.runs)
     return 0
 

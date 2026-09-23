@@ -155,6 +155,80 @@ def _model_bbox() -> Tuple[Vec, Vec]:
     return (b[0], b[1], b[2]), (b[3], b[4], b[5])
 
 
+def geometry_mode_inputs(load_tags: Sequence[int], fix_tags: Sequence[int],
+                         samples_per_curve: int = 24
+                         ) -> Tuple[Vec, Vec, List[Vec]]:
+    """Pre-mesh inputs for compute_dominant_mode, from the open OCC model.
+
+    Returns the area weighted centroid of the load faces, the same for the
+    constraint faces, and points sampled on every CAD edge. Edges are bounded
+    curves, so no sample falls outside a trimmed face. The extent of a solid
+    bounded by planes and cylinders along any direction is reached on its
+    edges, so the samples give the true extent to within the sampling step.
+    """
+    def wcentroid(tags):
+        m = [gmsh.model.occ.getMass(2, int(t)) for t in tags]
+        c = [gmsh.model.occ.getCenterOfMass(2, int(t)) for t in tags]
+        w = sum(m)
+        return tuple(sum(mi * ci[k] for mi, ci in zip(m, c)) / w
+                     for k in range(3))
+    pts: List[Vec] = []
+    for _, ctag in gmsh.model.getEntities(1):
+        lo, hi = gmsh.model.getParametrizationBounds(1, ctag)
+        n = samples_per_curve
+        par = [lo[0] + (hi[0] - lo[0]) * i / (n - 1) for i in range(n)]
+        v = gmsh.model.getValue(1, ctag, par)
+        pts += [tuple(v[i:i + 3]) for i in range(0, len(v), 3)]
+    return wcentroid(load_tags), wcentroid(fix_tags), pts
+
+
+def section_depth_by_rays(cc: Vec, e: Vec, d_dir: Vec, rlen: float,
+                          n_rays: int = 11, n_steps: int = 400
+                          ) -> Optional[Tuple[float, List[float]]]:
+    """Depth of the load-carrying section, measured on the solid itself.
+
+    Cuts the part with the plane normal to the lever arm at half the lever
+    arm, fires n_rays parallel rays across that plane along the transverse
+    force direction, and keeps the contiguous solid intervals. The depth is
+    the longest interval: the thickest member the section cuts. Two thin
+    lugs with a gap count as two 5 mm members, not one 17 mm block, which a
+    bounding box or a point cloud extent cannot tell apart.
+
+    Returns None when the OCC model cannot answer point-in-solid queries.
+    """
+    vols = [t for _, t in gmsh.model.getEntities(3)]
+    if not vols:
+        return None
+    lo, hi = _model_bbox()
+    diag = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
+    t = (e[1] * d_dir[2] - e[2] * d_dir[1],
+         e[2] * d_dir[0] - e[0] * d_dir[2],
+         e[0] * d_dir[1] - e[1] * d_dir[0])
+    p0 = tuple(cc[i] + 0.5 * rlen * e[i] for i in range(3))
+    ds = 2.0 * diag / n_steps
+    intervals: List[float] = []
+    try:
+        for k in range(n_rays):
+            a = -0.5 * diag + diag * k / (n_rays - 1)
+            run = 0
+            for j in range(n_steps + 1):
+                sj = -diag + j * ds
+                p = [p0[i] + a * t[i] + sj * d_dir[i] for i in range(3)]
+                inside = any(gmsh.model.isInside(3, v, p) for v in vols)
+                if inside:
+                    run += 1
+                elif run:
+                    intervals.append(run * ds)
+                    run = 0
+            if run:
+                intervals.append(run * ds)
+    except Exception:
+        return None
+    if not intervals:
+        return None
+    return max(intervals), sorted(set(round(x, 2) for x in intervals))
+
+
 # ---------------------------------------------------------------------------
 # COMPUTE: dominant deformation mode
 # ---------------------------------------------------------------------------
@@ -165,7 +239,9 @@ BENDING_SLENDERNESS = 2.0  # lever/depth above this means bending, not shear
 
 def compute_dominant_mode(load_pts: Sequence[Vec],
                           force: Vec,
-                          constraint_pts: Sequence[Vec]) -> ModeEvidence:
+                          constraint_pts: Sequence[Vec],
+                          body_pts: Optional[Sequence[Vec]] = None
+                          ) -> ModeEvidence:
     """Derive the dominant deformation mode from the load path.
 
     Method, deliberately simple and auditable:
@@ -184,6 +260,15 @@ def compute_dominant_mode(load_pts: Sequence[Vec],
         It therefore never returns "torsion" and says so.
       - a zero resultant, for example a self-equilibrated pressure, returns
         "unknown" instead of guessing.
+      - section depth is measured on the solid by section_depth_by_rays:
+        the thickest member cut at half the lever arm, along the transverse
+        force direction. If the model cannot answer point-in-solid queries,
+        it falls back to the extent of body_pts along that direction, then to
+        the bounding box extent sum |d_i * dx_i|. Both fallbacks over-estimate
+        depth on thin-walled parts, lean to "shear", and are named in the
+        reasoning when used.
+      - the section at half the lever arm is one cut. A part whose thickest
+        member elsewhere differs strongly is not seen.
     """
     lc = _centroid(load_pts)
     cc = _centroid(constraint_pts)
@@ -213,7 +298,23 @@ def compute_dominant_mode(load_pts: Sequence[Vec],
         d_dir = tuple(v / f_across for v in across_v)
     else:
         d_dir = e
-    depth = abs(sum((hi[i] - lo[i]) * d_dir[i] for i in range(3)))
+    depth_note = ""
+    axial = abs(f_along) > AXIAL_DOMINANCE * f_across
+    rays = section_depth_by_rays(cc, e, d_dir, rlen) \
+        if f_across > 1e-12 and not axial else None
+    if rays is not None:
+        depth, cuts = rays
+        depth_note = (f"; section at half lever arm cuts members of "
+                      f"{', '.join(f'{c:.2f}' for c in cuts)} mm")
+    elif body_pts:
+        proj = [sum(p[i] * d_dir[i] for i in range(3)) for p in body_pts]
+        depth = max(proj) - min(proj)
+        depth_note = "; depth FALLBACK: whole part extent, leans to shear"
+    else:
+        depth_note = "; depth FALLBACK: bounding box, leans to shear"
+        # per component abs: without it, off-axis directions with mixed signs
+        # cancel and report a depth near zero
+        depth = sum(abs((hi[i] - lo[i]) * d_dir[i]) for i in range(3))
     if depth < 1e-9:
         depth = min(hi[i] - lo[i] for i in range(3))
     slender = rlen / depth if depth > 0 else 0.0
@@ -229,12 +330,12 @@ def compute_dominant_mode(load_pts: Sequence[Vec],
                             lc, cc,
                             f"transverse force on a lever arm {slender:.1f} "
                             f"times the section depth, so bending stress "
-                            f"dominates shear")
+                            f"dominates shear" + depth_note)
     return ModeEvidence("shear", rlen, depth, slender, f_along, f_across,
                         lc, cc,
                         f"transverse force with a lever arm only "
                         f"{slender:.1f} times the section depth, so shear "
-                        f"is not negligible against bending")
+                        f"is not negligible against bending" + depth_note)
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +448,9 @@ def write_case(deck_path: str,
             lpts += _node_coords(node_sets[l.selection])
         for c in spec.constraints:
             cpts += _node_coords(node_sets[c.selection])
-        report.mode = compute_dominant_mode(lpts, total_f, cpts)
+        _, xyz, _ = gmsh.model.mesh.getNodes()
+        body = [tuple(xyz[i:i + 3]) for i in range(0, len(xyz), 3)]
+        report.mode = compute_dominant_mode(lpts, total_f, cpts, body)
     else:
         report.notes.append(
             "dominant mode not computed: needs at least one force load and "
@@ -447,17 +550,27 @@ def write_case(deck_path: str,
 # ---------------------------------------------------------------------------
 
 def reconcile_load_case(computed: Optional[ModeEvidence],
-                        assumed: Optional[LoadCase]) -> List[str]:
-    """If the caller asserted a mode and the geometry says otherwise, say so.
+                        assumed: Optional[LoadCase],
+                        source: str = "ASSERTED") -> List[str]:
+    """If the mode the mesh was sized for differs from the mode computed on
+    the final mesh, say so, and say where the first one came from.
 
-    Silence here would be the worst outcome: the locking rules would run on
-    the asserted mode and report PASS for the wrong physics.
+    source is one of "ASSERTED" (the user said it), "COMPUTED BEFORE MESHING"
+    (geometry) or "ASSUMED" (neither was available). Silence here would be the
+    worst outcome: the locking rules would run on one mode while the mesh was
+    sized for another.
     """
     if computed is None or assumed is None:
         return []
     if assumed.dominant_mode == computed.mode:
         return []
-    return [f"ASSERTED mode '{assumed.dominant_mode}' disagrees with the "
-            f"COMPUTED mode '{computed.mode}'. The locking check will use the "
-            f"computed one. If the asserted value was right, the load or the "
-            f"constraint selection is wrong."]
+    tail = {"ASSERTED": "If the asserted value was right, the load or the "
+                        "constraint selection is wrong.",
+            "COMPUTED BEFORE MESHING": "The geometry estimate and the mesh "
+                        "estimate disagree, so the mode is near a threshold.",
+            "ASSUMED": "Nobody asserted the first value. It was a default."
+            }.get(source, "")
+    return [f"{source} mode '{assumed.dominant_mode}' disagrees with the "
+            f"mode COMPUTED on the mesh, '{computed.mode}'. The locking check "
+            f"uses the computed one, but the mesh was sized for "
+            f"'{assumed.dominant_mode}'. {tail}".rstrip()]
