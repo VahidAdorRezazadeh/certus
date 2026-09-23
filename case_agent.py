@@ -196,6 +196,36 @@ def section_depth_by_rays(cc: Vec, e: Vec, d_dir: Vec, rlen: float
     return TH.section_depth(cc, e, d_dir, rlen)
 
 
+def pressure_resultant(face_tags: Sequence[int], pressure: float,
+                       n: int = 40) -> Vec:
+    """Resultant of a uniform pressure (positive INTO the surface) on CAD
+    faces: F = -p * integral of n dA, integrated on each face's own
+    parametrisation, trimmed points dropped. Independent of the mesh and of
+    the face labels written into the deck, so check 1 can compare the two.
+    A full cylinder gives about zero, which is the correct answer."""
+    F = [0.0, 0.0, 0.0]
+    for tag in face_tags:
+        lo, hi = gmsh.model.getParametrizationBounds(2, int(tag))
+        u0, v0 = float(lo[0]), float(lo[1])
+        u1, v1 = float(hi[0]), float(hi[1])
+        du, dv = (u1 - u0) / n, (v1 - v0) / n
+        for i in range(n):
+            for j in range(n):
+                uv = [u0 + (i + 0.5) * du, v0 + (j + 0.5) * dv]
+                if not gmsh.model.isInside(2, int(tag), uv, parametric=True):
+                    continue
+                d = gmsh.model.getDerivative(2, int(tag), uv)
+                a = d[0:3]
+                b = d[3:6]
+                cr = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+                      a[0] * b[1] - a[1] * b[0])
+                dA = math.sqrt(sum(c * c for c in cr)) * du * dv
+                nrm = gmsh.model.getNormal(int(tag), uv)
+                for k in range(3):
+                    F[k] -= pressure * nrm[k] * dA
+    return tuple(F)
+
+
 # ---------------------------------------------------------------------------
 # COMPUTE: dominant deformation mode
 # ---------------------------------------------------------------------------

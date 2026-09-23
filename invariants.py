@@ -522,6 +522,73 @@ def _components(deck: Deck) -> List[set]:
     return list(groups.values())
 
 
+def dsload_faces(deck: Deck) -> Tuple[List[Tuple[float, List[int], List[float]]], List[str]]:
+    """Pressure faces from *DSLOAD / *DLOAD Pn on element faces:
+    [(pressure, corner node ids, outward area vector)], plus the load types
+    that could not be resolved. Outward means away from the element's own
+    centroid, so a wrong face label shows up as a wrong direction."""
+    cards = _cards(deck.path)
+    surf = {o.get("NAME", "").upper(): d for k, o, d in cards
+            if k == "SURFACE" and o.get("TYPE", "ELEMENT").upper() == "ELEMENT"}
+    out, skipped = [], []
+
+    def add(el_ids, label, p):
+        idx_map = _FACES.get(label.upper())
+        for e in el_ids:
+            etype, conn = deck.elements[e]
+            idx = idx_map.get(len(conn)) if idx_map else None
+            if not idx:
+                skipped.append(f"{etype} {label}")
+                continue
+            ids = [conn[i] for i in idx]
+            P = [deck.nodes[i] for i in ids]
+            fc = [sum(p[k] for p in P) / len(P) for k in range(3)]
+            ec = [sum(deck.nodes[i][k] for i in conn) / len(conn)
+                  for k in range(3)]
+            A = [0.0, 0.0, 0.0]
+            for a, b in zip(P, P[1:] + P[:1]):
+                A[0] += 0.5 * (a[1] * b[2] - a[2] * b[1])
+                A[1] += 0.5 * (a[2] * b[0] - a[0] * b[2])
+                A[2] += 0.5 * (a[0] * b[1] - a[1] * b[0])
+            if sum((fc[k] - ec[k]) * A[k] for k in range(3)) < 0:
+                A = [-v for v in A]
+            out.append((p, ids, A))
+    for k, _o, data in cards:
+        if k not in ("DSLOAD", "DLOAD"):
+            continue
+        for ln in data:
+            t = [x.strip() for x in ln.split(",")]
+            if len(t) < 3:
+                continue
+            lab = t[1].upper()
+            try:
+                p = float(t[2])
+            except ValueError:
+                continue
+            if k == "DSLOAD" and lab == "P":
+                for sl in surf.get(t[0].upper(), []):
+                    st = [x.strip() for x in sl.split(",")]
+                    els = deck.elsets.get(st[0].upper()) or \
+                        ([int(st[0])] if st[0].isdigit() else [])
+                    add(els, st[1], p)
+            elif k == "DLOAD" and lab.startswith("P") and lab[1:].isdigit():
+                els = deck.elsets.get(t[0].upper()) or \
+                    ([int(t[0])] if t[0].isdigit() else [])
+                add(els, "S" + lab[1:], p)
+            else:
+                skipped.append(f"{k} {lab}")
+    return out, skipped
+
+
+def pressure_resultant_deck(deck: Deck) -> Tuple[Tuple[float, float, float], List[str]]:
+    faces, skipped = dsload_faces(deck)
+    F = [0.0, 0.0, 0.0]
+    for p, _ids, A in faces:
+        for k in range(3):
+            F[k] -= p * A[k]
+    return tuple(F), skipped
+
+
 # ---- 1. load against stated intent (free) ---------------------------------
 
 def check_load_intent(deck: Deck, intent: Intent) -> Finding:
@@ -553,9 +620,17 @@ def check_load_intent(deck: Deck, intent: Intent) -> Finding:
     for n, dof, val in per_set:
         if 1 <= dof <= 3:
             applied[dof - 1] += n * val
+    pF, skipped = pressure_resultant_deck(deck)
+    if skipped:
+        return Finding(R, "NOT EVALUATED", f"cannot integrate "
+                       f"{', '.join(sorted(set(skipped)))} yet")
+    applied = [applied[k] + pF[k] for k in range(3)]
     fm = max(sum(v * v for v in intent.force) ** 0.5, 1e-30)
     err = sum((applied[i] - intent.force[i]) ** 2 for i in range(3)) ** 0.5
-    if err > 1e-3 * fm:
+    # a pressure resultant from CAD and from facets differs by the facet
+    # approximation of curved faces; 1e-3 of the load is kept for forces
+    rtol = 1e-2 if deck.has_dload else 1e-3
+    if err > rtol * fm:
         problems.append(f"deck resultant ({applied[0]:.4g}, {applied[1]:.4g},"
                         f" {applied[2]:.4g}) is not the stated "
                         f"{tuple(intent.force)}")
@@ -567,7 +642,7 @@ def check_load_intent(deck: Deck, intent: Intent) -> Finding:
                         f"DOFs, e.g. node {shared[0][0]} dof {shared[0][1]}")
     # every loaded node on the declared load set, every part of it loaded
     lset = set(deck.nsets.get(intent.load_set.upper(), []))
-    if lset:
+    if lset and deck.cloads:
         off = [n for n, _d, _v in deck.cloads if n not in lset]
         if off:
             problems.append(f"{len(off)} loaded node(s) are not on "
@@ -797,13 +872,21 @@ def check_rigid_modes(deck: Deck) -> Finding:
 # ---- 5-7: gated extra solves ---------------------------------------------
 
 def _qoi(deck: Deck, disp) -> float:
-    """Load-point displacement sum(F.u)/|F|, or max |U| without loads."""
+    """Load-point displacement sum(F.u)/|F|, or max |U| without loads.
+    Pressure faces count with their force shared equally by their corners."""
     F = [0.0, 0.0, 0.0]
     w = 0.0
     for n, d, v in deck.cloads:
         if 1 <= d <= 3 and n in disp:
             F[d - 1] += v
             w += v * disp[n][d - 1]
+    if deck.has_dload:
+        for p, ids, A in dsload_faces(deck)[0]:
+            for k in range(3):
+                fk = -p * A[k]
+                F[k] += fk
+                w += sum(fk / len(ids) * disp.get(i, (0, 0, 0))[k]
+                         for i in ids)
     fm = sum(x * x for x in F) ** 0.5
     if fm > 0:
         return w / fm

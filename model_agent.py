@@ -40,7 +40,7 @@ from mesh_agent import MeshRequest, run_mesh_agent
 from locking_check import MaterialSpec, LoadCase, check_locking
 from case_agent import (CaseSpec, LoadSpec, ConstraintSpec, write_case,
                         reconcile_load_case, compute_dominant_mode,
-                        geometry_mode_inputs)
+                        geometry_mode_inputs, pressure_resultant)
 from results_check import (read_frd_disp, convergence, Comparison,
                            ccx_outcome)
 from run_dir import RunDir
@@ -328,9 +328,13 @@ def run(step_path: str,
         # the force; else asserted by the user; else an ASSUMED default that
         # is reported as such. Never labelled as something the user said.
         pre = None
-        if load_kind == "force" and any(abs(c) > 0 for c in force):
+        f_eff = tuple(force) if load_kind == "force" else \
+            pressure_resultant(load_tags, pressure)
+        if load_kind == "pressure":
+            rd.set("pressure_resultant_N", list(f_eff))
+        if any(abs(c) > 1e-9 for c in f_eff):
             lc, cc, body = geometry_mode_inputs(load_tags, fix_tags)
-            pre = compute_dominant_mode([lc], tuple(force), [cc], body)
+            pre = compute_dominant_mode([lc], f_eff, [cc], body)
         if pre is not None and pre.mode != "unknown":
             mode_src, mode0 = "COMPUTED BEFORE MESHING", pre.mode
         elif asserted_mode:
@@ -475,7 +479,8 @@ def run(step_path: str,
     # ---- the seven checks: stated intent, from the answers, not the deck
     import invariants as INV
     intent = INV.Intent(
-        force=tuple(force) if load_kind == "force" else None,
+        force=(tuple(force) if load_kind == "force" else
+               tuple(rd.meta.get("pressure_resultant_N") or (0.0, 0.0, 0.0))),
         units="N-mm-MPa", E_GPa=material.E / 1000.0,
         material_class=("elastic-plastic" if material.plastic_response_expected
                         else "elastic"),
@@ -527,17 +532,15 @@ def run(step_path: str,
             # anywhere is a local peak and is reported only for context.
             try:
                 from invariants import read_deck
+                import invariants as _INV
                 dk = read_deck(deck)
                 disp = read_frd_disp(info)
-                F = [0.0, 0.0, 0.0]
-                work = 0.0
-                for nid, dof, val in dk.cloads:
-                    if 1 <= dof <= 3 and nid in disp:
-                        F[dof - 1] += val
-                        work += val * disp[nid][dof - 1]
+                F = list(_INV.applied_resultant(dk))
+                pF, _sk = _INV.pressure_resultant_deck(dk)
+                F = [F[k] + pF[k] for k in range(3)]
                 fm = sum(v * v for v in F) ** 0.5
                 if fm > 0:
-                    delta = work / fm
+                    delta = _INV._qoi(dk, disp)
                     umax = max(sum(c * c for c in v) ** 0.5
                                for v in disp.values())
                     rd.set("load_point_displacement_mm", delta)
@@ -813,11 +816,12 @@ def main():
     else:
         press = _number("How big is the pressure, in MPa (positive pushes "
                         "INTO the surface)", 1.0)
-        print("  -> a pressure has no single resultant direction, so the "
-              "dominant mode cannot be derived from it here.")
-        asserted = _pick("What deformation dominates? (it sizes the mesh; "
-                         "'not sure' uses bending and reports it as an "
-                         "assumption)",
+        print("  -> the resultant of the pressure is integrated over the face "
+              "and used to compute the mode. Only if it is zero (a closed "
+              "surface such as a full hole) is the question below used.")
+        asserted = _pick("If the pressure has no resultant, what deformation "
+                         "dominates? ('not sure' uses bending and reports it "
+                         "as an assumption)",
                          ["not sure", "bending", "axial", "shear", "torsion"],
                          0)
 
