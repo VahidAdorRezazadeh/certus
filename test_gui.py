@@ -214,11 +214,16 @@ if __name__ == "__main__":
     srv = HTTPServer(("127.0.0.1", 0), Stub)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
+    import hashlib
+    ref = lambda: hashlib.sha1(open("part.step", "rb").read()).hexdigest()
+    before = ref()
     results = []
     for lying in (False, True):
         print(f"\n=== {'lying' if lying else 'good'} model ===")
         results.append(drive(port, lying))
     srv.shutdown()
+    assert ref() == before, "the GUI overwrote the reference part.step"
+    results.append("reference part.step untouched")
     print("\nRESULT")
     for r in results:
         print("  " + r)

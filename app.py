@@ -297,12 +297,22 @@ def stage_part():
     if "cad" not in S():
         with st.spinner("Writing build123d code, building, measuring. "
                         "A local model can take several minutes."):
+            # cad_agent writes part.step, part_spec.json ... into the
+            # current folder. Run it inside this session's folder so the
+            # reference bracket in the repo is never overwritten. (chdir is
+            # process wide: fine for a one-user local app.)
             with captured("CAD generation"):
-                os.chdir(HERE)
-                S().cad = CA.generate(S().intent.get("part") or S().prompt,
-                                      S().image, spec=S().spec,
-                                      confirm=False)
+                os.chdir(session_dir())
+                try:
+                    S().cad = CA.generate(
+                        S().intent.get("part") or S().prompt, S().image,
+                        spec=S().spec, confirm=False)
+                finally:
+                    os.chdir(HERE)
     cad = S().cad
+    for k in ("step", "drawing"):
+        if cad.get(k) and not os.path.isabs(cad[k]):
+            cad[k] = os.path.join(session_dir(), cad[k])
     v = cad.get("verdict", "")
     passed = v.startswith("PASS")
     (st.success if passed else st.error)(f"Measured verification: {v}")
@@ -323,9 +333,7 @@ def stage_part():
         st.rerun()
     if passed:
         if b3.button("Use this part", type="primary"):
-            dst = os.path.join(session_dir(), "part.step")
-            shutil.copy(cad["step"], dst)
-            S().step = dst
+            S().step = cad["step"]      # already inside the session folder
             go(3)
     else:
         b3.warning("Certus does not simulate a part that failed its own "
