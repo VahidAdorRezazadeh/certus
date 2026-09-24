@@ -544,39 +544,10 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2,
                       oracle_element=oracle_el, notes=notes)
 
 
-# ----------------------------------------------------------------------------
-# Optional LLM edge: free text -> MeshRequest. Not required for the agent.
-# ----------------------------------------------------------------------------
-
-INTERPRET_SYSTEM = (
-    "You convert an engineering request into JSON for a meshing agent.\n"
-    "Return ONLY a JSON object, no prose, no markdown fences, with keys:\n"
-    '  "dominant_mode": one of "bending","axial","shear","torsion","mixed","unknown"\n'
-    '  "confident": true or false\n'
-    '  "nu": number or null\n'
-    '  "E": number or null\n'
-    '  "plastic_response_expected": true or false\n'
-    '  "prefer_family": "tet" or "hex" or null\n'
-    '  "elements_across_min_dim": integer or null\n'
-    "Rules: if the load description does not let you determine the dominant\n"
-    "deformation mode with confidence, you MUST return \"unknown\". Do not\n"
-    "guess. A wrong mode disables the shear-locking check silently."
-)
-
-
-def interpret_request(text: str, model: Optional[str] = None) -> Dict[str, Any]:
-    """Optional. Requires ANTHROPIC_API_KEY. Kept out of the mesh path so the
-    agent runs fully offline and deterministically without it."""
-    import json
-    from anthropic import Anthropic
-    model = model or os.environ.get("MESH_AGENT_MODEL", "claude-sonnet-5")
-    client = Anthropic()
-    msg = client.messages.create(
-        model=model, max_tokens=600, system=INTERPRET_SYSTEM,
-        messages=[{"role": "user", "content": text}])
-    raw = "".join(b.text for b in msg.content if b.type == "text").strip()
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return json.loads(raw)
+# The optional LLM edge that turned free text into a MeshRequest was removed on
+# 24 Sept 2026. It asked the model for the dominant mode, E, nu and the element
+# family, which are physics decisions. It had no caller. The GUI reads intent
+# through intent.py, which never asks for physics.
 
 
 # ----------------------------------------------------------------------------

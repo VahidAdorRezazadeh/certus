@@ -713,19 +713,22 @@ SELECT_SYSTEM = (
 
 def resolve_selection(phrase: str, cat: Catalogue,
                       model: Optional[str] = None) -> Dict[str, Any]:
-    """Optional. Requires ANTHROPIC_API_KEY."""
-    import os
-    import json
-    from anthropic import Anthropic
-    model = model or os.environ.get("BC_AGENT_MODEL", "claude-sonnet-5")
-    client = Anthropic()
-    msg = client.messages.create(
-        model=model, max_tokens=500, system=SELECT_SYSTEM,
-        messages=[{"role": "user", "content":
-                   f"{cat.describe_for_llm()}\n\nPhrase: {phrase}"}])
-    raw = "".join(b.text for b in msg.content if b.type == "text").strip()
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    out = json.loads(raw)
+    """Optional language edge. Uses whichever model llm.py is set to. The
+    reply is validated against the catalogue below, and the GUI shows the
+    pick for confirmation, so a wrong or invented id never passes silently."""
+    import llm
+    if model:
+        llm.configure(model=model)
+    raw = llm.ask(SELECT_SYSTEM,
+                  [{"type": "text", "text":
+                    f"{cat.describe_for_llm()}\n\nPhrase: {phrase}"}],
+                  max_tokens=500, role="face naming")
+    out = llm.json_or_none(raw)
+    if out is None:
+        return {"group_ids": [], "confident": False,
+                "reason": "model reply was not JSON: " + raw[:120]}
+    out["group_ids"] = [i for i in out.get("group_ids", [])
+                        if isinstance(i, int)]
     valid = {g.group_id for g in cat.groups}
     bad = [i for i in out.get("group_ids", []) if i not in valid]
     if bad:

@@ -16,7 +16,7 @@ harness measures the solid. A model cannot talk its way past a bounding box or a
 hole count. "It ran without error" is NOT evidence of correct geometry, which is
 why the older version happily returned a flat plate when asked for a bracket.
 
-Requires:  pip install build123d anthropic matplotlib numpy
+Requires:  pip install build123d matplotlib numpy  (plus anthropic for the Claude API)
     NOTE: build123d 0.11 requires numpy>=2. Do NOT follow the "downgrade to
     numpy<2" hint in NumPy's own ABI warning: it will break build123d.
     Use a dedicated environment instead (see README notes at the bottom).
@@ -39,7 +39,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 # ----------------------------------------------------------------------
 # CONFIG
 # ----------------------------------------------------------------------
-MODEL        = os.environ.get("CAD_AGENT_MODEL", "claude-sonnet-5")
+# The model, and where it runs (Claude API or a local server), is set in llm.py.
 MAX_ATTEMPTS = int(os.environ.get("CAD_AGENT_ATTEMPTS", "5"))
 VISUAL_CHECK = os.environ.get("CAD_AGENT_VISUAL", "1") == "1"
 # A model that thinks before answering can spend its whole budget on thinking and
@@ -296,21 +296,19 @@ def _image_block(image_path: str):
     return {"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}}
 
 
-def _ask_raw(system: str, content: list, max_tokens: int = 2000):
+def _ask_raw(system: str, content: list, max_tokens: int = 2000,
+             role: str = "cad"):
     """Returns (text, stop_reason). stop_reason == 'max_tokens' means the reply
     was cut off, which can leave the text empty if the budget was spent before
-    any text was emitted."""
-    from anthropic import Anthropic
-    with Anthropic().messages.stream(
-            model=MODEL, max_tokens=max_tokens, system=system,
-            messages=[{"role": "user", "content": content}]) as stream:
-        msg = stream.get_final_message()
-    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-    return strip_fences(text), getattr(msg, "stop_reason", None)
+    any text was emitted. The provider (Claude API or a local OpenAI-compatible
+    server) is chosen in llm.py."""
+    import llm
+    return llm.ask_raw(system, content, max_tokens, role=role)
 
 
-def _ask(system: str, content: list, max_tokens: int = 2000) -> str:
-    return _ask_raw(system, content, max_tokens)[0]
+def _ask(system: str, content: list, max_tokens: int = 2000,
+         role: str = "cad") -> str:
+    return _ask_raw(system, content, max_tokens, role)[0]
 
 
 def _json_or_none(text: str):
@@ -346,7 +344,7 @@ def call_llm_spec(request: str, image_path: str | None = None) -> dict:
                         "The image shows the intended part. Read dimensions from it "
                         "where they are annotated. Do not guess unmarked dimensions."})
     for attempt in range(1, 4):
-        raw = _ask(SPEC_SYSTEM, content, max_tokens=4000)
+        raw = _ask(SPEC_SYSTEM, content, max_tokens=4000, role="spec")
         spec = _json_or_none(raw)
         if spec is not None:
             return spec
@@ -377,7 +375,7 @@ def call_llm_code(request: str, spec: dict, prior_code: str | None = None,
 
     budget = CODE_MAX_TOKENS
     for shot in range(1, 4):
-        code, stop = _ask_raw(CODE_SYSTEM, content, max_tokens=budget)
+        code, stop = _ask_raw(CODE_SYSTEM, content, max_tokens=budget, role="code")
         if code.strip() and "part" in code:
             if stop == "max_tokens":
                 print("[code] warning: reply hit the token limit and may be truncated. "
@@ -408,7 +406,7 @@ def call_llm_visual(request: str, png_path: str, image_path: str | None = None) 
         content.append(_image_block(image_path))
     content.append({"type": "text", "text": "Three-view drawing of the GENERATED part:"})
     content.append(_image_block(png_path))
-    return _json_or_none(_ask(VISION_SYSTEM, content, max_tokens=2500)) or {}
+    return _json_or_none(_ask(VISION_SYSTEM, content, max_tokens=2500, role="visual (advisory)")) or {}
 
 
 # ----------------------------------------------------------------------
@@ -889,6 +887,8 @@ def archive_cad_run(request, spec, results, verdict_text, meas, drawing,
                          "verdict comes from measuring the built solid",
                          "an optional visual review is advisory only"])
     rd.set("step", OUT_STEP)
+    import llm
+    rd.set("llm_model", llm.CONFIG.label())
 
     rd.section("REQUEST, AS TYPED", request)
 
