@@ -444,7 +444,14 @@ def _r7_bending_resolution(el, mat, lc) -> Optional[Finding]:
             "supply the section geometry (force direction and lever arm) so "
             "the count can be measured on the mesh.",
             Owner.MESH)
-    if n >= MIN_ELEMENTS_THROUGH_THICKNESS_BENDING:
+    # Incompatible-mode and quadratic hexes resolve bending with fewer
+    # layers. Measured, CalculiX 2.21, cantilever L/H 20: C3D8I with 2
+    # through the depth 98.6% of beam theory; C3D20R with 2: 99.1%, with 1:
+    # 98.1%. Tets are unmeasured and keep the general threshold.
+    need = 2 if (el.integration == "incompatible" or
+                 (el.family == "hex" and el.order == 2)) else \
+        MIN_ELEMENTS_THROUGH_THICKNESS_BENDING
+    if n >= need:
         return None
     sev = Severity.SEVERE if n <= 1 else Severity.MODERATE
     where = (f"measured on the mesh across a {el.measured_thickness:.2f} mm "
@@ -457,7 +464,7 @@ def _r7_bending_resolution(el, mat, lc) -> Optional[Finding]:
         f"cannot be resolved.",
         "bending stiffness and surface stress both wrong, separately from any "
         "locking effect.",
-        f"use at least {MIN_ELEMENTS_THROUGH_THICKNESS_BENDING} elements "
+        f"use at least {need} elements "
         f"through the thickness, or use quadratic elements, or use shells if "
         f"the part is genuinely thin.",
         Owner.MESH)

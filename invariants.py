@@ -448,6 +448,10 @@ class Intent:
     nlgeom: Optional[bool] = None
     load_set: str = "LOAD_FACE"
     contact_tol: Optional[float] = None    # allowed penetration, length unit
+    # how the real support holds the part: "bonded" (welded, built in: a
+    # clamp is the truth) or "seated" (resting, bolted, pinned: the support
+    # cannot pull and has limited friction). None = not stated.
+    support: Optional[str] = None
 
 
 _E_SCALE = {"N-mm-MPa": 1e3, "N-m-Pa": 1e9}          # GPa -> deck units
@@ -630,7 +634,11 @@ def check_load_intent(deck: Deck, intent: Intent) -> Finding:
     # a pressure resultant from CAD and from facets differs by the facet
     # approximation of curved faces; 1e-3 of the load is kept for forces
     rtol = 1e-2 if deck.has_dload else 1e-3
-    if err > rtol * fm:
+    two_d = any(t[:3] in ("CPS", "CPE", "CAX")
+                for t, _ in deck.elements.values())
+    # 2D: the deck force is per its own thickness; that comparison belongs
+    # to checker.check_thickness, one owner per error
+    if err > rtol * fm and not two_d:
         problems.append(f"deck resultant ({applied[0]:.4g}, {applied[1]:.4g},"
                         f" {applied[2]:.4g}) is not the stated "
                         f"{tuple(intent.force)}")
@@ -697,9 +705,15 @@ def _face_patches(deck: Deck, nset: set) -> List[set]:
 # ---- 2. small-strain validity (free) --------------------------------------
 
 def check_small_strain(deck: Deck, disp: Dict[int, Tuple[float, float, float]],
-                       intent: Intent, limit: float = 0.01) -> Finding:
+                       intent: Intent, limit: float = 0.1) -> Finding:
     """A run declared geometrically linear must deform little: max |U| below
-    1 percent of the model size. Abstains when NLGEOM is on."""
+    10 percent of the model size. Abstains when NLGEOM is on.
+
+    Threshold measured, CalculiX 2.21, C3D20R cantilever, linear against
+    NLGEOM tip deflection: d/L 0.013 -> 0.02%, 0.050 -> 0.26%, 0.101 ->
+    1.04%, 0.202 -> 4.04%. At 10 percent of the size the linear answer is
+    about 1 percent off. The first version used 1 percent of the size and
+    flagged a correct model at d/L 0.013."""
     R = "2 SMALL STRAIN"
     cards = _cards(deck.path)
     if _nlgeom(cards) or intent.nlgeom:
@@ -835,6 +849,9 @@ def check_rigid_modes(deck: Deck) -> Finding:
                        f"which the BC rank test does not model")
     cn = constrained_nodes(deck)
     bodies = _components(deck)
+    # 2D plane elements (x-y plane) have 3 rigid modes: Tx, Ty, Rz
+    plane2d = all(t[:3] in ("CPS", "CPE") for t, _ in deck.elements.values())
+    keep = [0, 1, 5] if plane2d else list(range(6))
     msgs = []
     for body in bodies:
         pts = [deck.nodes[n] for n in body]
@@ -849,23 +866,26 @@ def check_rigid_modes(deck: Deck) -> Finding:
                 r = {1: [1, 0, 0, 0, z, -y], 2: [0, 1, 0, -z, 0, x],
                      3: [0, 0, 1, y, -x, 0]}[d]
                 rows.append(r)
-        A = np.array(rows, dtype=float) if rows else np.zeros((1, 6))
+        A = np.array(rows, dtype=float)[:, keep] if rows else \
+            np.zeros((1, len(keep)))
         scale = max(1.0, float(np.abs(A).max()))
         _u, s, vt = np.linalg.svd(A / scale, full_matrices=True)
         rank = int((s > 1e-9 * max(1.0, s.max() if s.size else 1)).sum())
-        if rank < 6:
+        if rank < len(keep):
             free = []
             for v in vt[rank:]:
                 v = v / np.abs(v).max()
-                free.append(" + ".join(f"{v[i]:.2g}{_MODES[i]}"
-                                       for i in range(6) if abs(v[i]) > 1e-6))
-            msgs.append(f"body of {len(body)} nodes keeps {6 - rank} free "
+                free.append(" + ".join(f"{v[i]:.2g}{_MODES[keep[i]]}"
+                                       for i in range(len(keep))
+                                       if abs(v[i]) > 1e-6))
+            msgs.append(f"body of {len(body)} nodes keeps "
+                        f"{len(keep) - rank} free "
                         f"rigid mode(s): " + "; ".join(free))
     if msgs:
         return Finding(R, "FAIL", " | ".join(msgs), owner="case_agent",
                        cure="constrain the listed modes, e.g. fix the "
                             "in-plane DOFs on the support face")
-    return Finding(R, "PASS", f"all 6 rigid modes removed on "
+    return Finding(R, "PASS", f"all {len(keep)} rigid modes removed on "
                    f"{len(bodies)} body(ies)")
 
 
@@ -1080,11 +1100,19 @@ def check_support_reactions(deck: Deck, frd_path: str, fix_set: str,
     span = max(s[0], 1e-30)
     if s[-1] / span > 1e-3:
         return Finding(R, "NOT EVALUATED", f"{fix_set} is not planar")
-    n = vt[-1]
-    allp = np.array(list(deck.nodes.values()))
-    if np.dot(allp.mean(axis=0) - c, n) > 0:
-        n = -n                      # outward from the part
     Rv = np.array([rf.get(k, (0.0, 0.0, 0.0)) for k in nodes])
+    if s[1] / span < 1e-3:
+        # a line or point support has no face normal: take the direction of
+        # its own net reaction, reversed, as the seat normal
+        tot = Rv.sum(axis=0)
+        if np.linalg.norm(tot) < 1e-30:
+            return Finding(R, "NOT EVALUATED", f"{fix_set} carries no load")
+        n = -tot / np.linalg.norm(tot)
+    else:
+        n = vt[-1]
+        allp = np.array(list(deck.nodes.values()))
+        if np.dot(allp.mean(axis=0) - c, n) > 0:
+            n = -n                  # outward from the part
     rn = Rv @ n
     rt = np.linalg.norm(Rv - np.outer(rn, n), axis=1)
     tens = rn[rn > 0].sum() / max(np.abs(rn).sum(), 1e-30)

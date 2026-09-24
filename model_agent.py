@@ -486,7 +486,8 @@ def run(step_path: str,
         units="N-mm-MPa", E_GPa=material.E / 1000.0,
         material_class=("elastic-plastic" if material.plastic_response_expected
                         else "elastic"),
-        rate_dependent=False, nlgeom=nlgeom, load_set="LOAD_FACE")
+        rate_dependent=False, nlgeom=nlgeom, load_set="LOAD_FACE",
+        support="seated")
     checks: list = []
     refused = None
     if "calculix" in decks:

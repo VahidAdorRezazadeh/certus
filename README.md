@@ -11,6 +11,8 @@ STEP in, CalculiX deck out, solve, report with a verdict that can fail.
     python model_agent.py part.step --solvers calculix --solve calculix --converge 4,2,1   # + Richardson study
 
     python test_checks.py        # the seven checks: seed, solve, verdict
+    python checker.py deck.inp   # check a deck someone else wrote
+    python -m benchmark.run_benchmark --runs 5   # Milestone B, 12 cases
 
 Every run writes `runs/<stamp>_<label>/` with `REPORT.txt` and `run.json` (not tracked).
 
@@ -29,6 +31,8 @@ Every run writes `runs/<stamp>_<label>/` with `REPORT.txt` and `run.json` (not t
 | `results_check.py`, `frdread.py` | read .frd results, compare to a closed form |
 | `cantilever.py` | the validation case and its closed form answer |
 | `invariants.py` | the seven checks: load vs intent, small strain, penetration, rigid-mode rank test, reversibility, rate independence, increment convergence |
+| `checker.py` | deck in, findings out: plane/thickness/symmetry/locking on the deck, the seven checks, support reactions, elastic past yield |
+| `benchmark/` | Milestone B: 12 seeded cases on one cantilever, five runs, `RESULTS.md` |
 | `thickness.py` | member thickness and elements through it, measured on the mesh (R7) |
 | `verify_sets.py` | reads a written deck back: did each node set land on the intended face |
 | `run_dir.py` | run folder, REPORT.txt, run.json |
