@@ -25,3 +25,5 @@ part_code_raw.txt
 *.bundle
 .vscode/
 .claude/
+# tool folders created on this machine (e.g. by the Streamlit prompt)
+.agents/
