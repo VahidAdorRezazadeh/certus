@@ -1,7 +1,7 @@
 # Milestone A, Step 0: measured reference results
 
 CalculiX 2.21, Linux, 23 August 2026. Every number below was produced by running
-the solver, not by recollection. Scripts to reproduce are in commit 6847315
+the solver, not by recollection. Scripts to reproduce are in commit 75a6ef0
 (removed from the tree on 23 Sep 2026 to keep it to the model only).
 
 ## Problem

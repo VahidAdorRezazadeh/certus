@@ -78,4 +78,4 @@ Every run writes `<workspace>/runs/<stamp>_<label>/` with `REPORT.txt` and `run.
 | `cli.py` | the `certus` and `certus-gui` commands |
 
 Milestone A probe scripts (aspect study, soft clamp, CLOAD semantics) were removed
-from the tree on 23 Sep 2026; they remain in commit `6847315`.
+from the tree on 23 Sep 2026; they remain in commit `75a6ef0`.
