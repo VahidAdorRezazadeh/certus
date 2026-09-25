@@ -7,12 +7,12 @@ off. Load-point displacement converges (PASS). Peak von Mises sits at the
 clamped edge, a stress singularity, and must FAIL on the same meshes.
 """
 import io, contextlib, os, shutil, sys, tempfile
-import cantilever as CANT
-import geometry_features as GF
-import model_agent as MA
-from geom_session import GeomSession
-from locking_check import MaterialSpec
-from results_check import richardson
+from certus import cantilever as CANT
+from certus import geometry_features as GF
+from certus import model_agent as MA
+from certus.geom_session import GeomSession
+from certus.locking_check import MaterialSpec
+from certus.results_check import richardson
 
 ok = True
 

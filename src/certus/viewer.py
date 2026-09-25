@@ -18,7 +18,7 @@ import numpy as np
 def face_mesh(step_path: str, size_factor: float = 0.06):
     """Returns (catalogue, {face_tag: (xyz Nx3, tri Mx3)})."""
     import gmsh
-    from geom_session import GeomSession
+    from certus.geom_session import GeomSession
     with GeomSession(step_path) as ses:
         cat = ses.catalogue
         span = max(np.subtract(cat.bbox_max, cat.bbox_min))
@@ -132,7 +132,7 @@ def result_figure(deck_path: str, frd_path: str, field: str = "U",
                   scale: Optional[float] = None, height: int = 520):
     """Deformed skin coloured by |U| (mm) or von Mises (MPa)."""
     import plotly.graph_objects as go
-    from frdread import read_frd_field, read_frd_stress, von_mises
+    from certus.frdread import read_frd_field, read_frd_stress, von_mises
     nodes, elems = _read_inp_mesh(deck_path)
     tris = _skin(elems)
     used = sorted({n for t in tris for n in t})

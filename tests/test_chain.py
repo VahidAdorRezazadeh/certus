@@ -4,10 +4,10 @@
 broken before."""
 
 import re
-import geometry_features as GF
-from geom_session import GeomSession
-from mesh_agent import MeshRequest, run_mesh_agent, _make_test_bracket
-from locking_check import MaterialSpec, LoadCase
+from certus import geometry_features as GF
+from certus.geom_session import GeomSession
+from certus.mesh_agent import MeshRequest, run_mesh_agent, _make_test_bracket
+from certus.locking_check import MaterialSpec, LoadCase
 
 
 def deck_stats(path):

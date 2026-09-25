@@ -42,8 +42,8 @@ import os
 
 import gmsh
 
-import geometry_features as GF
-from geometry_features import Catalogue, NamedSelection
+from certus import geometry_features as GF
+from certus.geometry_features import Catalogue, NamedSelection
 
 
 class GeomSession:

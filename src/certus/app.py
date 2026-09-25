@@ -4,7 +4,7 @@ app.py - Certus in a browser tab. Local web page, nothing leaves the machine
 unless the Claude API is chosen as the language model.
 
     pip install streamlit plotly
-    streamlit run app.py
+    certus-gui            (or: streamlit run src/certus/app.py)
 
 Six stages. The language model works only where the user's words are read
 (stages 1 and 3). Everything else is the same deterministic code the command
@@ -30,8 +30,8 @@ import time
 
 import streamlit as st
 
-import llm
-import intent as INT
+from certus import llm
+from certus import intent as INT
 
 # Streamlit runs this script in a worker thread. gmsh.initialize() installs a
 # Ctrl-C signal handler by default, and Python allows that only in the main
@@ -46,8 +46,9 @@ if not getattr(_gmsh.initialize, "_certus_gui", False):
     _init._certus_gui = True
     _gmsh.initialize = _init
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WORK = os.path.join(HERE, "runs", "gui")
+from certus.paths import RUNS
+HERE = os.getcwd()                  # restored after CAD generation
+WORK = os.path.join(str(RUNS), "gui")
 STAGES = ["Ask", "Understood", "Part", "Faces", "Details", "Verdict"]
 
 st.set_page_config(page_title="Certus", page_icon="🔩", layout="wide")
@@ -225,7 +226,7 @@ def stage_ask():
                 S().intent = INT.validate({}, prompt)
             S().spec = None
             if not S().step:
-                import cad_agent as CA
+                from certus import cad_agent as CA
                 part_text = S().intent.get("part") or prompt
                 with captured("specification"):
                     S().spec = CA.call_llm_spec(part_text, S().image)
@@ -292,7 +293,7 @@ def stage_understood():
 # ---------------------------------------------------------------------------
 
 def stage_part():
-    import cad_agent as CA
+    from certus import cad_agent as CA
     st.header("The part")
     if "cad" not in S():
         with st.spinner("Writing build123d code, building, measuring. "
@@ -349,7 +350,7 @@ def _suggest(phrase, cat):
     model is confident about exactly one group. The user still confirms."""
     if not phrase:
         return None, "no phrase in your text"
-    import geometry_features as GF
+    from certus import geometry_features as GF
     try:
         r = GF.resolve_selection(phrase, cat)
     except Exception as e:
@@ -362,8 +363,8 @@ def _suggest(phrase, cat):
 
 
 def stage_faces():
-    import viewer
-    import geometry_features as GF
+    from certus import viewer
+    from certus import geometry_features as GF
     st.header("Where is the load, and what holds the part?")
     if "tri" not in S():
         with st.spinner("Reading faces..."):
@@ -442,7 +443,7 @@ def _num(label, key, it, **kw):
 
 
 def stage_details():
-    import model_agent as MA
+    from certus import model_agent as MA
     st.header("The details the simulation needs")
     st.caption("Values read from your text are filled in. Empty boxes are "
                "the questions. Material constants come from Certus's own "
@@ -512,8 +513,8 @@ def _vector(f):
 
 
 def _run_args():
-    import model_agent as MA
-    from locking_check import MaterialSpec
+    from certus import model_agent as MA
+    from certus.locking_check import MaterialSpec
     f = S().form
     mat = MA.MATERIALS[f["material"]]
     if f["ys"]:
@@ -569,8 +570,8 @@ def answer_text(meta, form) -> str:
 
 
 def stage_verdict():
-    import model_agent as MA
-    import viewer
+    from certus import model_agent as MA
+    from certus import viewer
     st.header("Verdict")
     if "rd" not in S():
         with st.spinner("Meshing, writing the deck, running the pre-solve "

@@ -32,7 +32,7 @@ import re
 import sys
 
 
-from frdread import read_frd_disp  # width-detecting .frd reader, shared so there is one copy
+from certus.frdread import read_frd_disp  # width-detecting .frd reader, shared so there is one copy
 
 
 @dataclass

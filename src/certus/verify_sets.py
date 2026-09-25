@@ -25,7 +25,7 @@ def read_inp(path):
     every check. The previous local parser read "1, 100, 1" under
     *NSET, GENERATE as three node ids.
     """
-    from invariants import read_deck
+    from certus.invariants import read_deck
     d = read_deck(path)
     return d.nodes, OrderedDict((k, v) for k, v in d.nsets.items())
 

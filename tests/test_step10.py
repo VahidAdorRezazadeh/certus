@@ -9,12 +9,12 @@ Known-bad: one face label in the *SURFACE block moved to the wrong element
 face. CalculiX runs it clean; check 1 must FAIL on the resultant.
 """
 import io, contextlib, json, os, re, shutil, sys, tempfile
-import cantilever as CANT
-import geometry_features as GF
-import invariants as INV
-import model_agent as MA
-from geom_session import GeomSession
-from locking_check import MaterialSpec
+from certus import cantilever as CANT
+from certus import geometry_features as GF
+from certus import invariants as INV
+from certus import model_agent as MA
+from certus.geom_session import GeomSession
+from certus.locking_check import MaterialSpec
 
 ok = True
 

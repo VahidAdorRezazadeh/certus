@@ -38,11 +38,11 @@ import math
 
 import gmsh
 
-from solvers import (
+from certus.solvers import (
     SolverProfile, get_solver, cure_availability, retype_inp,
     deployment_solvers,
 )
-from locking_check import (
+from certus.locking_check import (
     ElementSpec, MaterialSpec, LoadCase, LockingReport, Severity, Owner,
     check_locking, suggest_element, to_calculix, BENDING_LIKE,
     NU_NEAR_INCOMPRESSIBLE, MIN_ELEMENTS_THROUGH_THICKNESS_BENDING,
@@ -383,7 +383,7 @@ def run_mesh_agent(req: MeshRequest, max_retries: int = 2,
         measured = None
         if req.section is not None and \
                 req.load_case.dominant_mode in BENDING_LIKE:
-            import thickness as TH
+            from certus import thickness as TH
             measured = TH.elements_through_member(*req.section)
         if measured is not None:
             n_thru = measured.elements

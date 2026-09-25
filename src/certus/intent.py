@@ -198,7 +198,7 @@ def validate(obj: Optional[dict], prompt: str) -> Intent:
 
 def read_intent(prompt: str, image_path: Optional[str] = None) -> Intent:
     """The language half, then the deterministic half."""
-    import llm
+    from certus import llm
     content = [{"type": "text", "text": f"Request:\n{prompt}"}]
     raw = llm.ask(INTENT_SYSTEM, content, max_tokens=1500, role="intent form")
     it = validate(llm.json_or_none(raw), prompt)

@@ -38,9 +38,12 @@ BASE_SUBDIRS = ("geometry", "mesh", "results")
 
 
 class RunDir:
-    def __init__(self, label: str, root: str = "runs",
+    def __init__(self, label: str, root: Optional[str] = None,
                  solvers: Tuple[str, ...] = ("abaqus",),
                  meta: Optional[Dict[str, Any]] = None):
+        if root is None:
+            from certus.paths import RUNS
+            root = str(RUNS)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         safe = "".join(c if (c.isalnum() or c in "-_") else "_"
                        for c in label)[:60]

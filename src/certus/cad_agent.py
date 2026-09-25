@@ -302,7 +302,7 @@ def _ask_raw(system: str, content: list, max_tokens: int = 2000,
     was cut off, which can leave the text empty if the budget was spent before
     any text was emitted. The provider (Claude API or a local OpenAI-compatible
     server) is chosen in llm.py."""
-    import llm
+    from certus import llm
     return llm.ask_raw(system, content, max_tokens, role=role)
 
 
@@ -857,11 +857,11 @@ def render_drawing(stl_path=OUT_STL, png_path=OUT_PNG, part_name="PART",
 #     results/   part_views.png, part_spec.json, part_verification.txt
 
 def archive_cad_run(request, spec, results, verdict_text, meas, drawing,
-                    history, image_path=None, run_root="runs"):
+                    history, image_path=None, run_root=None):
     """Copy this run's artifacts into runs/<stamp>_cad_<label>/ and write the
     report. Returns the folder path, or None if run_dir.py is not importable."""
     try:
-        from run_dir import RunDir
+        from certus.run_dir import RunDir
     except Exception as e:
         print(f"[runs] not archived, run_dir.py unavailable: {e}")
         return None
@@ -887,7 +887,7 @@ def archive_cad_run(request, spec, results, verdict_text, meas, drawing,
                          "verdict comes from measuring the built solid",
                          "an optional visual review is advisory only"])
     rd.set("step", OUT_STEP)
-    import llm
+    from certus import llm
     rd.set("llm_model", llm.CONFIG.label())
 
     rd.section("REQUEST, AS TYPED", request)

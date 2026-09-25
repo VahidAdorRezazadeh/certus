@@ -5,13 +5,15 @@ Old behaviour: the retry sized elements from 2V/A / 3, then R7 read
 2V/A / size = 3.0 and passed by construction. Now R7 reads a count measured on
 the final mesh (member thickness / local element edge), or abstains.
 """
+from certus.paths import EXAMPLE_STEP
+REF_STEP = str(EXAMPLE_STEP)
 import io, contextlib, sys
-import geometry_features as GF
-from geom_session import GeomSession
-from mesh_agent import MeshRequest, run_mesh_agent
-from locking_check import LoadCase
-from case_agent import geometry_mode_inputs, compute_dominant_mode
-import model_agent as MA
+from certus import geometry_features as GF
+from certus.geom_session import GeomSession
+from certus.mesh_agent import MeshRequest, run_mesh_agent
+from certus.locking_check import LoadCase
+from certus.case_agent import geometry_mode_inputs, compute_dominant_mode
+from certus import model_agent as MA
 
 ok = True
 
@@ -23,7 +25,7 @@ def check(name, cond, detail=""):
 
 
 def run(retries, with_section):
-    with GeomSession("part.step") as ses:
+    with GeomSession(REF_STEP) as ses:
         lt = list(GF.largest_hole(ses.catalogue).tags)
         ft = list(GF.extreme_planar_face(ses.catalogue, axis=2,
                                          side="min").tags)
@@ -33,7 +35,7 @@ def run(retries, with_section):
         m = compute_dominant_mode([lc], (100.0, 0.0, 0.0), [cc], body)
         sec = (m.constraint_centroid, m.lever_dir, m.depth_dir,
                m.lever_arm) if with_section else None
-        req = MeshRequest("part.step", MA.MATERIALS["steel"],
+        req = MeshRequest(REF_STEP, MA.MATERIALS["steel"],
                           LoadCase(m.mode), target_size=2.5,
                           out_prefix="/tmp/certus_t4", section=sec)
         with contextlib.redirect_stdout(io.StringIO()):

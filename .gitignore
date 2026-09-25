@@ -1,5 +1,9 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+# run output belongs in <workspace>/runs, never in the repo
 runs/
 *.frd
 *.msh
@@ -9,9 +13,15 @@ runs/
 *.cvg
 *.12d
 spooles.out
+# CAD agent scratch files when run from the repo folder
 *.step
-!part.step
+*.stl
+part_views.png
+part_verification.txt
+part_spec_raw.txt
+part_code_raw.txt
+/part_spec.json
+!examples/*.step
+*.bundle
 .vscode/
 .claude/
-Demo/
-experiments/

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """test_step9.py - interface defects: menus, --solvers, fill band, footer."""
+from certus.paths import EXAMPLE_STEP
+REF_STEP = str(EXAMPLE_STEP)
 import builtins, io, contextlib, sys, tempfile
-import model_agent as MA
-import cad_agent as CA
-from run_dir import RunDir
+from certus import model_agent as MA
+from certus import cad_agent as CA
+from certus.run_dir import RunDir
 
 ok = True
 
@@ -44,7 +46,7 @@ seen = {}
 MA.ask_face = lambda cat, role: type("G", (), {"tags": [1]})()
 MA.run = lambda *a, **k: seen.update(k)
 feed(["", "", "", "", "", ""])         # material, goal, kind, dir, N, hold
-sys.argv = ["model_agent.py", "part.step", "--solvers", "calculix"]
+sys.argv = ["model_agent.py", REF_STEP, "--solvers", "calculix"]
 with contextlib.redirect_stdout(io.StringIO()):
     MA.main()
 check("--solvers calculix is used on the STEP path",

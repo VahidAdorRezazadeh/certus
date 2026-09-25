@@ -716,7 +716,7 @@ def resolve_selection(phrase: str, cat: Catalogue,
     """Optional language edge. Uses whichever model llm.py is set to. The
     reply is validated against the catalogue below, and the GUI shows the
     pick for confirmation, so a wrong or invented id never passes silently."""
-    import llm
+    from certus import llm
     if model:
         llm.configure(model=model)
     raw = llm.ask(SELECT_SYSTEM,
@@ -744,7 +744,7 @@ def resolve_selection(phrase: str, cat: Catalogue,
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import mesh_agent as M
+    from certus import mesh_agent as M
     step = M._make_test_bracket()
     cat = build_catalogue(step)
     print(cat.render())

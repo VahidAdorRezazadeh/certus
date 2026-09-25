@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Dict, Optional
 
 from benchmark import decks as D
-from checker import DeckIntent
+from certus.checker import DeckIntent
 
 F = D.F_TIP
 

@@ -8,7 +8,7 @@ replaced by a stub, the measured checks pass, and the visual stub says
 written to the report. No API key needed.
 """
 import os, sys, tempfile
-import cad_agent as CA
+from certus import cad_agent as CA
 
 calls = {"code": 0, "visual": 0}
 W = tempfile.mkdtemp(prefix="certus_t6_")

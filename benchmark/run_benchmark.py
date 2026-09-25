@@ -21,8 +21,8 @@ against physical tests.
 from __future__ import annotations
 import argparse, io, contextlib, json, os, shutil, sys, tempfile, time
 
-import invariants as INV
-from checker import check_deck
+from certus import invariants as INV
+from certus.checker import check_deck
 from benchmark.cases import CASES
 from benchmark import decks as D
 
@@ -95,9 +95,9 @@ def run_case12(c, W):
     """Pipeline case: a Richardson study through model_agent on the same
     cantilever. Seed: judge peak von Mises (singular at the clamped edge).
     Control: judge the load-point displacement on the same meshes."""
-    import cantilever as CANT, geometry_features as GF, model_agent as MA
-    from geom_session import GeomSession
-    from locking_check import MaterialSpec
+    from certus import cantilever as CANT, geometry_features as GF, model_agent as MA
+    from certus.geom_session import GeomSession
+    from certus.locking_check import MaterialSpec
     d = os.path.join(W, "case12")
     os.makedirs(d, exist_ok=True)
     cl = CANT.Cantilever()

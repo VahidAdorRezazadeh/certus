@@ -8,7 +8,7 @@ Known-good: a 3-2-1 seat under compression. Under-constraint is check 4
 (test_checks.py); here the pipeline itself must refuse a roller.
 """
 import os, sys, tempfile, shutil
-import invariants as INV
+from certus import invariants as INV
 import test_checks_helpers as H
 
 ok = True

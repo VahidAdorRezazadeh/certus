@@ -6,8 +6,8 @@ warning, where the check returns FAIL; and a known-good case where it returns
 PASS. Where a check can abstain, the abstention is tested too. Needs ccx.
 """
 import os, shutil, sys, tempfile
-import invariants as INV
-from invariants import Intent
+from certus import invariants as INV
+from certus.invariants import Intent
 
 W = tempfile.mkdtemp(prefix="certus_chk_")
 ok = True

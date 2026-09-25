@@ -31,9 +31,9 @@ import math
 import os
 import sys
 
-import invariants as INV
-from invariants import Intent, Deck, read_deck
-from locking_check import (ElementSpec, MaterialSpec, LoadCase, check_locking,
+from certus import invariants as INV
+from certus.invariants import Intent, Deck, read_deck
+from certus.locking_check import (ElementSpec, MaterialSpec, LoadCase, check_locking,
                            Severity)
 
 Vec = Tuple[float, float, float]
@@ -381,7 +381,7 @@ def check_yield(deck: Deck, frd: str, it: DeckIntent) -> Optional[CFinding]:
     if plastic or it.material_class == "elastic-plastic":
         return CFinding(R, "NOT NEEDED", detail="plasticity is modelled",
                         provenance="checker.check_yield")
-    from frdread import read_frd_stress, von_mises
+    from certus.frdread import read_frd_stress, von_mises
     try:
         s = max(von_mises(v) for v in read_frd_stress(frd).values())
     except RuntimeError:

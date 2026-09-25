@@ -428,8 +428,8 @@ def read_total_force(path: str, set_name: Optional[str] = None
     return last
 
 
-from frdread import read_frd_disp  # width-detecting .frd reader, shared so there is one copy
-from results_check import ccx_outcome  # one convergence verdict for every caller
+from certus.frdread import read_frd_disp  # width-detecting .frd reader, shared so there is one copy
+from certus.results_check import ccx_outcome  # one convergence verdict for every caller
 
 
 # ---------------------------------------------------------------------------
@@ -943,7 +943,7 @@ def check_reversibility(deck: Deck, intent: Intent, workdir: str) -> Finding:
     r = solve(p)
     if not r["converged"]:
         return Finding(R, "NOT EVALUATED", f"unload run: {r['outcome']}")
-    blocks = __import__("frdread").read_frd_disp_blocks(r["frd"])
+    blocks = __import__("certus.frdread", fromlist=["_"]).read_frd_disp_blocks(r["frd"])
     s1 = [b for b in blocks if b["step"] == 1]
     loaded = max(sum(c * c for c in u) ** 0.5 for u in s1[-1]["disp"].values())
     resid = max(sum(c * c for c in u) ** 0.5
@@ -1086,7 +1086,7 @@ def check_support_reactions(deck: Deck, frd_path: str, fix_set: str,
     """
     R = "8 SUPPORT REACTIONS"
     import numpy as np
-    from frdread import read_frd_field
+    from certus.frdread import read_frd_field
     nodes = sorted(set(deck.nsets.get(fix_set.upper(), [])))
     if len(nodes) < 3:
         return Finding(R, "NOT EVALUATED", f"no node set {fix_set}")

@@ -36,11 +36,11 @@ import math
 
 import gmsh
 
-import thickness as TH
+from certus import thickness as TH
 
-import geometry_features as GF
-from locking_check import MaterialSpec, LoadCase
-from solvers import get_solver
+from certus import geometry_features as GF
+from certus.locking_check import MaterialSpec, LoadCase
+from certus.solvers import get_solver
 
 Vec = Tuple[float, float, float]
 

@@ -18,6 +18,8 @@ Two runs:
 """
 
 from __future__ import annotations
+from certus.paths import EXAMPLE_STEP
+REF_STEP = str(EXAMPLE_STEP)
 import json
 import os
 import re
@@ -139,9 +141,9 @@ def drive(port: int, lying: bool):
     from streamlit.testing.v1 import AppTest
     MODE["intent"] = INTENT_LYING if lying else INTENT_GOOD
     os.environ["CERTUS_LLM_PROVIDER"] = "openai"
-    import llm
+    from certus import llm
     llm.CALL_LOG.clear()
-    at = AppTest.from_file("app.py", default_timeout=900)
+    at = AppTest.from_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "certus", "app.py"), default_timeout=900)
     at.run()
     at.sidebar.selectbox[0].set_value("other")
     at.run()
@@ -215,7 +217,7 @@ if __name__ == "__main__":
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
     import hashlib
-    ref = lambda: hashlib.sha1(open("part.step", "rb").read()).hexdigest()
+    ref = lambda: hashlib.sha1(open(REF_STEP, "rb").read()).hexdigest()
     before = ref()
     results = []
     for lying in (False, True):

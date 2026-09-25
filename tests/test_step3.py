@@ -4,10 +4,12 @@
 A fix is only presented as working after the old behaviour was shown to be
 wrong on the bad case and the new behaviour right on both. Needs ccx on PATH.
 """
+from certus.paths import EXAMPLE_STEP
+REF_STEP = str(EXAMPLE_STEP)
 import os, shutil, subprocess, tempfile, sys
-import invariants as INV
-from results_check import ccx_outcome
-import verify_sets as VS
+from certus import invariants as INV
+from certus.results_check import ccx_outcome
+from certus import verify_sets as VS
 
 W = tempfile.mkdtemp(prefix="certus_s3_")
 ok = True
@@ -115,18 +117,19 @@ check("missing set returns None", INV.read_total_force(dat, "NOPE") is None)
 # 5. pin bearing load, reactions in the deck, load-point displacement ----
 # Real bracket through the pipeline. -Z and +Z must load opposite halves of
 # the hole, split 50/50 between the lugs, with the exact resultant.
-if os.path.exists("part.step") and shutil.which("ccx"):
+assert os.path.exists(REF_STEP), f"reference bracket missing: {REF_STEP}"
+if shutil.which("ccx"):
     import json, io, contextlib
-    import geometry_features as GF
-    from geom_session import GeomSession
-    import model_agent as MA
-    with GeomSession("part.step") as ses:
+    from certus import geometry_features as GF
+    from certus.geom_session import GeomSession
+    from certus import model_agent as MA
+    with GeomSession(REF_STEP) as ses:
         lt = list(GF.largest_hole(ses.catalogue).tags)
         ft = list(GF.extreme_planar_face(ses.catalogue, axis=2,
                                          side="min").tags)
     for fz in (-100.0, 100.0):
         with contextlib.redirect_stdout(io.StringIO()):
-            rd = MA.run("part.step", "t3", MA.MATERIALS["steel"], lt, ft,
+            rd = MA.run(REF_STEP, "t3", MA.MATERIALS["steel"], lt, ft,
                         (0, 0, fz), solvers=("calculix",), target_size=2.5,
                         solve_with="calculix", run_root=W)
         js = json.load(open(os.path.join(rd.path, "run.json")))

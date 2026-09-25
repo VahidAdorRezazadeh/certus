@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "certus"
+version = "0.1.0"
+description = "Natural-language FEA with deterministic physics checks"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "gmsh",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+cad = ["build123d"]
+gui = ["streamlit", "plotly"]
+claude = ["anthropic"]
+all = ["build123d", "streamlit", "plotly", "anthropic"]
+
+[project.scripts]
+certus = "certus.cli:model"
+certus-gui = "certus.cli:gui"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -34,17 +34,18 @@ import shutil
 import subprocess
 import sys
 
-import geometry_features as GF
-from geom_session import GeomSession
-from mesh_agent import MeshRequest, run_mesh_agent
-from locking_check import MaterialSpec, LoadCase, check_locking
-from case_agent import (CaseSpec, LoadSpec, ConstraintSpec, write_case,
+from certus import geometry_features as GF
+from certus.geom_session import GeomSession
+from certus.mesh_agent import MeshRequest, run_mesh_agent
+from certus.locking_check import MaterialSpec, LoadCase, check_locking
+from certus.case_agent import (CaseSpec, LoadSpec, ConstraintSpec, write_case,
                         reconcile_load_case, compute_dominant_mode,
                         geometry_mode_inputs, pressure_resultant)
-from results_check import (read_frd_disp, convergence, Comparison,
+from certus.results_check import (read_frd_disp, convergence, Comparison,
                            ccx_outcome)
-from run_dir import RunDir
-import cantilever as CANT
+from certus.run_dir import RunDir
+from certus.paths import RUNS
+from certus import cantilever as CANT
 
 # What the user is trying to find out changes what the agent checks. A goal
 # that is collected and then ignored is worse than no question: it implies the
@@ -231,7 +232,7 @@ def _cure_table(element, lreport) -> str:
     turns 'you need a hybrid element' into 'CalculiX cannot, Abaqus and
     FEniCSx can', which is a stack decision instead of a dead end.
     """
-    from solvers import cure_availability
+    from certus.solvers import cure_availability
     needed = set()
     for f in getattr(lreport, "findings", []) or []:
         txt = (f.recommended_action + " " + f.consequence + " "
@@ -304,8 +305,9 @@ def run(step_path: str,
         solve_with: Optional[str] = None,
         asserted_mode: Optional[str] = None,
         mesh_retries: int = 2,
-        run_root: str = "runs") -> RunDir:
+        run_root: Optional[str] = None) -> RunDir:
 
+    run_root = run_root or str(RUNS)
     rd = RunDir(label, root=run_root, solvers=tuple(solvers), meta={
         "step": os.path.abspath(step_path),
         "material": material.name,
@@ -479,7 +481,7 @@ def run(step_path: str,
 
     headline = "DECKS WRITTEN, NOT YET SOLVED"
     # ---- the seven checks: stated intent, from the answers, not the deck
-    import invariants as INV
+    from certus import invariants as INV
     intent = INV.Intent(
         force=(tuple(force) if load_kind == "force" else
                tuple(rd.meta.get("pressure_resultant_N") or (0.0, 0.0, 0.0))),
@@ -534,8 +536,8 @@ def run(step_path: str,
             # conjugate to the applied load, sum(F_i . u_i) / |F|. Max |U|
             # anywhere is a local peak and is reported only for context.
             try:
-                from invariants import read_deck
-                import invariants as _INV
+                from certus.invariants import read_deck
+                from certus import invariants as _INV
                 dk = read_deck(deck)
                 disp = read_frd_disp(info)
                 F = list(_INV.applied_resultant(dk))
@@ -548,7 +550,7 @@ def run(step_path: str,
                                for v in disp.values())
                     rd.set("load_point_displacement_mm", delta)
                     try:
-                        from frdread import read_frd_stress, von_mises
+                        from certus.frdread import read_frd_stress, von_mises
                         rd.set("max_von_mises_MPa", max(
                             von_mises(s) for s in read_frd_stress(info).values()))
                     except Exception:
@@ -669,7 +671,7 @@ def run(step_path: str,
 def convergence_study(step_path: str, label: str, material: MaterialSpec,
                       load_tags, fix_tags, force, sizes: Sequence[float],
                       qoi: str = "load_point_displacement_mm",
-                      run_root: str = "runs", **kw) -> Tuple[str, object]:
+                      run_root: Optional[str] = None, **kw) -> Tuple[str, object]:
     """Solve the same case at three or more sizes and judge convergence.
 
     Works for any STEP case, not only the cantilever. Mesh retries are OFF:
@@ -681,7 +683,8 @@ def convergence_study(step_path: str, label: str, material: MaterialSpec,
     a fine-grid GCI above 2 percent.
     """
     import json as _json
-    from results_check import richardson
+    from certus.results_check import richardson
+    run_root = run_root or str(RUNS)
     pairs, rows = [], []
     for sz in sizes:
         rd_i = run(step_path, f"{label}_conv{sz:g}", material, load_tags,
@@ -710,13 +713,14 @@ def convergence_study(step_path: str, label: str, material: MaterialSpec,
 # entry points
 # ---------------------------------------------------------------------------
 
-def cantilever_run(solvers=ALL_SOLVERS, target_size=1.0, run_root="runs",
+def cantilever_run(solvers=ALL_SOLVERS, target_size=1.0, run_root=None,
                    sigma_target=50.0, solve_with=None,
                    converge: Optional[Sequence[float]] = None) -> RunDir:
     c = CANT.Cantilever()
     F = c.force_for_stress(sigma_target)
     print(c.render(F))
 
+    run_root = run_root or str(RUNS)
     os.makedirs(run_root, exist_ok=True)
     step = os.path.join(run_root, "_cantilever.step")
     CANT.write_step(c, step)
@@ -770,7 +774,8 @@ def main():
                          "displacement, cantilever or STEP")
     ap.add_argument("--size", type=float, default=None)
     ap.add_argument("--nlgeom", action="store_true")
-    ap.add_argument("--runs", default="runs")
+    ap.add_argument("--runs", default=None,
+                    help="output folder (default: CERTUS_RUNS or <workspace>/runs)")
     a = ap.parse_args()
     solvers = tuple(s.strip() for s in (a.solvers or "abaqus,calculix")
                     .split(",") if s.strip())
