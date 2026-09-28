@@ -101,6 +101,15 @@ class MeshTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'non-finite'):
             read_inp_mesh(self.deck)
 
+    def test_local_coordinate_system_is_rejected(self):
+        self.deck.write_text('*SYSTEM\n0,0,0,1,0,0\n'+self.deck.read_text())
+        with self.assertRaisesRegex(ValueError,'global-coordinate'):
+            read_inp_mesh(self.deck)
+
+    def test_non_finite_stress_is_rejected(self):
+        with self.assertRaisesRegex(ValueError,'non-finite'):
+            self.data('S',stresses={n:(float('nan'),0,0,0,0,0) for n in range(1,5)})
+
     def test_nonmanifold_is_rejected(self):
         with self.assertRaisesRegex(ValueError,'Non-manifold'):
             skin([[1,2,3,4],[1,2,3,5],[1,2,3,6]])

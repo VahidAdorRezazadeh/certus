@@ -144,7 +144,11 @@ def results_view(deck, frd, *, key="results"):
         opts = view_options(key)
         with st.expander("Contour & display settings"):
             c1, c2, c3 = st.columns(3)
-            colorscale = c1.selectbox("Colour map", ["Viridis", "Cividis", "Turbo"], key=f"{key}_colors")
+            signed = fields[which] in ("UX", "UY", "UZ")
+            colorscale = c1.selectbox("Colour map", ["RdBu_r"] if signed else ["Viridis", "Cividis", "Turbo"],
+                                     key=f"{key}_colors_{signed}", disabled=signed)
+            if signed:
+                c1.caption("Signed components use a diverging scale centred on zero.")
             reference = c2.toggle("Undeformed outline", value=True, key=f"{key}_reference")
             extrema = c3.toggle("Surface min / max", value=False, key=f"{key}_extrema")
             axes = c2.toggle("Coordinate axes", value=True, key=f"{key}_axes")
