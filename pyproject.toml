@@ -15,9 +15,9 @@ dependencies = [
 
 [project.optional-dependencies]
 cad = ["build123d"]
-gui = ["streamlit", "plotly"]
+gui = ["streamlit>=1.50,<2", "plotly>=6,<7"]
 claude = ["anthropic"]
-all = ["build123d", "streamlit", "plotly", "anthropic"]
+all = ["build123d", "streamlit>=1.50,<2", "plotly>=6,<7", "anthropic"]
 
 [project.scripts]
 certus = "certus.cli:model"
@@ -25,3 +25,6 @@ certus-gui = "certus.cli:gui"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+certus = ["assets/*.svg", "assets/*.css", "assets/Fonts/*.ttf", "assets/Fonts/*.txt"]

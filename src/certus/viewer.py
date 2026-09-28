@@ -42,121 +42,152 @@ def face_mesh(step_path: str, size_factor: float = 0.06):
     return cat, out
 
 
-def faces_figure(tri: Dict[int, Tuple[np.ndarray, np.ndarray]],
-                 load_tags: Sequence[int] = (), fix_tags: Sequence[int] = (),
-                 hover: Optional[Dict[int, str]] = None, height: int = 520):
-    import plotly.graph_objects as go
-    traces = []
-    load_tags, fix_tags = set(load_tags), set(fix_tags)
-    for tag, (xyz, t) in tri.items():
-        if not len(t):
-            continue
-        if tag in load_tags:
-            color, name = "#d62728", "LOAD"
-        elif tag in fix_tags:
-            color, name = "#1f77b4", "FIXED"
-        else:
-            color, name = "#c8c8c8", "face"
-        traces.append(go.Mesh3d(
-            x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2],
-            i=t[:, 0], j=t[:, 1], k=t[:, 2], color=color, opacity=1.0,
-            flatshading=True, name=f"{name} face {tag}",
-            hovertext=(hover or {}).get(tag, f"face {tag}"),
-            hoverinfo="text",
-            lighting=dict(ambient=0.55, diffuse=0.7, specular=0.1)))
-    fig = go.Figure(traces)
-    fig.update_layout(height=height, margin=dict(l=0, r=0, t=0, b=0),
-                      scene=dict(aspectmode="data",
-                                 xaxis_title="X", yaxis_title="Y",
-                                 zaxis_title="Z"),
-                      showlegend=False)
+# Stable presentation constants. The legend uses the same colours as the selection UI.
+LOAD_COLOR, SUPPORT_COLOR = "#df623e", "#327ca8"
+VIEW_BG, INK = "#122C3F", "#DCE7ED"
+
+
+def _layout(fig, height, view, projection, show_axes=True):
+    cameras = {
+        "Isometric": dict(eye=dict(x=1.45,y=-1.65,z=1.2), up=dict(x=0,y=0,z=1)),
+        "Front · XZ": dict(eye=dict(x=0,y=-2.1,z=0), up=dict(x=0,y=0,z=1)),
+        "Top · XY": dict(eye=dict(x=0,y=0,z=2.1), up=dict(x=0,y=1,z=0)),
+        "Right · YZ": dict(eye=dict(x=2.1,y=0,z=0), up=dict(x=0,y=0,z=1)),
+    }
+    camera = dict(cameras.get(view, cameras["Isometric"]), projection=dict(type=projection))
+    def axis(label):
+        return dict(title=dict(text=f"{label} · mm", font=dict(size=10)), visible=show_axes,
+                    showbackground=False, gridcolor="#294554", zerolinecolor="#426170",
+                    tickfont=dict(size=9,color="#9AB1BE"), showspikes=False)
+    fig.update_layout(
+        template="none", height=height, margin=dict(l=10,r=20,t=36,b=12),
+        paper_bgcolor=VIEW_BG, plot_bgcolor=VIEW_BG,
+        font=dict(family="IBM Plex Sans, sans-serif",color=INK,size=12),
+        scene=dict(bgcolor=VIEW_BG,aspectmode="data",camera=camera,dragmode="orbit",
+                   xaxis=axis("X"), yaxis=axis("Y"), zaxis=axis("Z")),
+        # Preserve a user's orbit when changing fields, but apply a requested preset.
+        uirevision=f"certus-{view}-{projection}",showlegend=False,
+        modebar=dict(bgcolor="#183A4F",color="#9AB1BE",activecolor="#72D0C8"),
+        hoverlabel=dict(bgcolor="#F4F7F8",font=dict(color="#102B3F",size=12)),
+    )
     return fig
 
 
-def _read_inp_mesh(deck_path: str):
-    """Nodes and C3D4/C3D10 (and hex) elements from a CalculiX deck,
-    following *INCLUDE lines. Enough to draw the skin."""
-    import os
-    nodes, elems = {}, []
-    mode = None
-
-    def walk(path):
-        nonlocal mode
-        base = os.path.dirname(path)
-        for line in open(path, errors="replace"):
-            s = line.strip()
-            if not s or s.startswith("**"):
-                continue
-            if s.startswith("*"):
-                up = s.upper()
-                if up.startswith("*INCLUDE"):
-                    inc = s.split("=", 1)[1].strip().strip('"')
-                    walk(os.path.join(base, inc))
-                    mode = None
-                elif up.startswith("*NODE") and not up.startswith("*NODE ") \
-                        and "PRINT" not in up and "FILE" not in up:
-                    mode = "n"
-                elif up.startswith("*ELEMENT"):
-                    t = up.split("TYPE=")[1].split(",")[0] if "TYPE=" in up \
-                        else ""
-                    mode = "e" if t.startswith("C3D") else None
-                else:
-                    mode = None
-                continue
-            parts = [p for p in s.replace(",", " ").split() if p]
-            if mode == "n" and len(parts) >= 4:
-                nodes[int(parts[0])] = tuple(float(v) for v in parts[1:4])
-            elif mode == "e":
-                elems.append([int(p) for p in parts[1:]])
-    walk(deck_path)
-    return nodes, elems
-
-
-def _skin(elems) -> List[Tuple[int, int, int]]:
-    """Boundary triangles of a tet mesh (corner nodes only)."""
-    from collections import Counter
-    faces = Counter()
-    keep = {}
-    for e in elems:
-        if len(e) < 4:
-            continue
-        a, b, c, d = e[:4]
-        for f in ((a, b, c), (a, b, d), (a, c, d), (b, c, d)):
-            k = tuple(sorted(f))
-            faces[k] += 1
-            keep[k] = f
-    return [keep[k] for k, n in faces.items() if n == 1]
-
-
-def result_figure(deck_path: str, frd_path: str, field: str = "U",
-                  scale: Optional[float] = None, height: int = 520):
-    """Deformed skin coloured by |U| (mm) or von Mises (MPa)."""
+def _lines(points, edges, color, *, width=1, opacity=1, name="Mesh edges"):
     import plotly.graph_objects as go
-    from certus.frdread import read_frd_field, read_frd_stress, von_mises
-    nodes, elems = _read_inp_mesh(deck_path)
-    tris = _skin(elems)
-    used = sorted({n for t in tris for n in t})
-    idx = {n: i for i, n in enumerate(used)}
-    X = np.array([nodes[n] for n in used])
-    U = read_frd_field(frd_path, "DISP")
-    D = np.array([U.get(n, (0, 0, 0))[:3] for n in used])
-    umag = np.linalg.norm(D, axis=1)
-    if field == "U":
-        val, title = umag, "|U| (mm)"
-    else:
-        S = read_frd_stress(frd_path)
-        val = np.array([von_mises(S[n]) if n in S else np.nan for n in used])
-        title = "von Mises (MPa), nodal, extrapolated by CalculiX"
-    span = float(np.ptp(X, axis=0).max())
-    if scale is None:
-        scale = 0.08 * span / umag.max() if umag.max() > 0 else 0.0
-    P = X + scale * D
-    T = np.array([[idx[a], idx[b], idx[c]] for a, b, c in tris])
-    fig = go.Figure(go.Mesh3d(
-        x=P[:, 0], y=P[:, 1], z=P[:, 2], i=T[:, 0], j=T[:, 1], k=T[:, 2],
-        intensity=val, colorscale="Turbo", colorbar=dict(title=title),
-        flatshading=False, hoverinfo="skip"))
-    fig.update_layout(height=height, margin=dict(l=0, r=0, t=30, b=0),
-                      title=f"deformation shown x{scale:.3g}",
-                      scene=dict(aspectmode="data"))
+    xyz = np.full((len(edges)*3,3), np.nan)
+    if len(edges):
+        xyz[0::3] = points[np.asarray(edges)[:,0]]
+        xyz[1::3] = points[np.asarray(edges)[:,1]]
+    return go.Scatter3d(x=xyz[:,0],y=xyz[:,1],z=xyz[:,2],mode="lines",
+                        line=dict(color=color,width=width),opacity=opacity,
+                        hoverinfo="skip",showlegend=False,name=name)
+
+
+def faces_figure(tri: Dict[int, Tuple[np.ndarray,np.ndarray]],
+                 load_tags: Sequence[int]=(), fix_tags: Sequence[int]=(),
+                 hover: Optional[Dict[int,str]]=None, height: int=560, *,
+                 view="Isometric", projection="orthographic", show_edges=False,
+                 show_axes=True, show_labels=False, opacity=1.0, load_vector=None):
+    import plotly.graph_objects as go
+    from html import escape
+    fig = go.Figure()
+    load_tags,fix_tags = set(load_tags),set(fix_tags)
+    centers = []
+    nonempty = [xyz for xyz,t in tri.values() if len(xyz) and len(t)]
+    if not nonempty:
+        raise ValueError("No surface triangles are available to display.")
+    span = float(np.ptp(np.concatenate(nonempty),axis=0).max())
+    for tag,(xyz,t) in tri.items():
+        if not len(t):
+            continue
+        selected = tag in load_tags or tag in fix_tags
+        role,color = ("Load + support", "#A879C5") if tag in load_tags & fix_tags else (
+            ("Load",LOAD_COLOR) if tag in load_tags else
+            ("Support",SUPPORT_COLOR) if tag in fix_tags else ("Geometry","#B9CBD3"))
+        text = escape((hover or {}).get(tag,f"Face {tag}"))
+        fig.add_trace(go.Mesh3d(
+            x=xyz[:,0],y=xyz[:,1],z=xyz[:,2],i=t[:,0],j=t[:,1],k=t[:,2],
+            color=color, opacity=1.0 if selected else opacity, flatshading=False,
+            name=f"{role} · face {tag}",
+            hovertemplate=f"<b>{role} · face {tag}</b><br>{text}<br>"+
+                          "X %{x:.4g} mm<br>Y %{y:.4g} mm<br>Z %{z:.4g} mm<extra></extra>",
+            lighting=dict(ambient=.48,diffuse=.85,specular=.22,roughness=.6),
+            lightposition=dict(x=1000,y=-1500,z=1800)))
+        # The boundary of each CAD face stays visible; optional triangulation is separate.
+        from collections import Counter
+        counts = Counter(tuple(sorted((int(a),int(b)))) for tr in t
+                         for a,b in ((tr[0],tr[1]),(tr[1],tr[2]),(tr[2],tr[0])))
+        edges = list(counts) if show_edges else [e for e,n in counts.items() if n == 1]
+        fig.add_trace(_lines(xyz,edges,"#102B3F",width=1.4 if selected else .8,opacity=.65))
+        center = xyz.mean(axis=0)
+        if show_labels:
+            centers.append((center,f"{role} {tag}"))
+        if tag in load_tags and load_vector is not None:
+            vec = np.asarray(load_vector,dtype=float)
+            norm = np.linalg.norm(vec)
+            if np.isfinite(vec).all() and norm > 0:
+                vec = vec/norm * span*.2
+                start = center-vec
+                fig.add_trace(_lines(np.array([start,center]),[(0,1)],LOAD_COLOR,width=5,name="Force direction"))
+                fig.add_trace(go.Cone(x=[center[0]],y=[center[1]],z=[center[2]],
+                    u=[vec[0]],v=[vec[1]],w=[vec[2]],anchor="tip",sizemode="absolute",
+                    sizeref=span*.07,colorscale=[[0,LOAD_COLOR],[1,LOAD_COLOR]],showscale=False,
+                    hovertemplate="Force direction (schematic)<extra></extra>"))
+    if centers:
+        points=np.asarray([p for p,_ in centers])
+        fig.add_trace(go.Scatter3d(x=points[:,0],y=points[:,1],z=points[:,2],
+                    mode="markers+text",text=[s for _,s in centers],textposition="top center",
+                    marker=dict(size=3,color=INK),textfont=dict(size=11,color=INK),hoverinfo="skip"))
+    return _layout(fig,height,view,projection,show_axes)
+
+
+# Preserve the earlier helper names for callers that use them.
+from certus.visual_mesh import read_inp_mesh as _read_inp_mesh, skin as _skin
+
+
+def result_figure(deck_path: str, frd_path: str, field: str="U",
+                  scale: Optional[float]=None, height: int=600, *,
+                  view="Isometric", projection="orthographic", show_edges=False,
+                  show_axes=True, colorscale="Viridis", show_reference=True, show_extrema=False):
+    import plotly.graph_objects as go
+    from certus.visual_mesh import result_data
+    d = result_data(deck_path,frd_path,field,scale)
+    P,T,val = d["P"],d["triangles"],d["values"]
+    custom=np.column_stack([d["nodes"],d["X"],d["U"],val])
+    cmin,cmax = float(val.min()),float(val.max())
+    # Signed components use a symmetric diverging scale around zero.
+    if field in ("UX","UY","UZ"):
+        limit=max(abs(cmin),abs(cmax)) or 1e-12
+        cmin,cmax,colorscale = -limit,limit,"RdBu_r"
+    elif cmin == cmax:
+        cmax=cmin+max(abs(cmin)*.01,1e-12)
+    fig=go.Figure(go.Mesh3d(
+        x=P[:,0],y=P[:,1],z=P[:,2],i=T[:,0],j=T[:,1],k=T[:,2],intensity=val,
+        intensitymode="vertex", colorscale=colorscale,cmin=cmin,cmax=cmax,
+        colorbar=dict(title=dict(text=f"{d['title']}<br>{d['units']}",side="top"),
+                      thickness=15,len=.7,x=1.01,tickformat=".3g",outlinewidth=0,
+                      tickfont=dict(size=10),bgcolor=VIEW_BG),
+        customdata=custom,flatshading=False,
+        lighting=dict(ambient=.85,diffuse=.35,specular=.05,roughness=.9),
+        hovertemplate="<b>Node %{customdata[0]:.0f}</b><br>"+
+                      f"{d['title']}: %{{customdata[7]:.5g}} {d['units']}<br>"+
+                      "X %{customdata[1]:.4g}, Y %{customdata[2]:.4g}, Z %{customdata[3]:.4g} mm<br>"+
+                      "Ux %{customdata[4]:.4g}, Uy %{customdata[5]:.4g}, Uz %{customdata[6]:.4g} mm<extra></extra>"))
+    if show_edges:
+        fig.add_trace(_lines(P,d["edges"],"#102B3F",width=1,opacity=.65))
+    if show_reference and d["scale"] != 0:
+        fig.add_trace(_lines(d["X"],d["edges"],"#ACC0CA",width=1,opacity=.18,name="Undeformed reference"))
+    if show_extrema:
+        ids=[int(np.argmin(val)),int(np.argmax(val))]
+        fig.add_trace(go.Scatter3d(x=P[ids,0],y=P[ids,1],z=P[ids,2],
+            mode="markers+text",marker=dict(size=5,color="#FFFFFF",line=dict(color="#102B3F",width=2)),
+            text=[f"Surface {label} · {val[i]:.4g} {d['units']}" for label,i in zip(("min","max"),ids)],
+            textposition="top center",textfont=dict(size=11),
+            hovertext=[f"Node {d['nodes'][i]}" for i in ids],hoverinfo="text"))
+    _layout(fig,height,view,projection,show_axes)
+    fig.update_layout(title=dict(text=f"{d['title']}  /  {d['units']}     ·     Deformation ×{d['scale']:.4g}",
+                                 x=.025,font=dict(size=12)),
+                      meta=dict(deformation_scale=d["scale"],surface_nodes=len(d["nodes"]),
+                                field=field,units=d["units"],surface_min=float(val.min()),surface_max=float(val.max())))
     return fig
