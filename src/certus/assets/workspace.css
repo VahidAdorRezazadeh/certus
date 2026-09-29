@@ -1,11 +1,11 @@
-:root { --certus-navy:#102B3F; --certus-teal:#007A7C; --certus-slate:#536775; --certus-paper:#F4F7F8; }
+:root { --certus-navy:#102B3F; --certus-teal:#007A7C; --certus-slate:#536775; --certus-paper:#E4EBF0; }
 .stApp { background:var(--certus-paper); color:var(--certus-navy); }
 .stApp, .stApp p, .stApp input, .stApp textarea, .stApp button, .stApp select,
 .stApp label, .stApp [data-baseweb="select"] { font-family:'IBM Plex Sans', sans-serif; }
 .stApp h1,.stApp h2,.stApp h3 { font-family:'IBM Plex Sans',sans-serif; font-weight:600; letter-spacing:-.025em; color:var(--certus-navy); }
 .stApp h1 { font-size:2rem; } .stApp h2 {font-size:1.3rem;} .stApp h3 {font-size:1.1rem;}
 .stApp code, .stApp pre, [data-testid="stMetricValue"] {font-family:'IBM Plex Mono',monospace;}
-[data-testid="stHeader"] { background:rgba(244,247,248,.94); }
+[data-testid="stHeader"] { background:rgba(228,235,240,.96); }
 [data-testid="stMainBlockContainer"] {padding:2.3rem 2.6rem 3rem; max-width:1700px;}
 [data-testid="stSidebar"] {background:#102B3F; border-right:1px solid #244154; color:#F4F7F8;}
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {padding-top:1.3rem;}
@@ -20,21 +20,41 @@
 .certus-brand {margin:-.5rem -.3rem 1.6rem;}
 .certus-brand img {display:block;width:205px;max-width:100%;}
 .certus-brand p {font-size:.6rem!important;line-height:1.8!important;letter-spacing:.15em;margin:0 0 0 15px;color:#c3d0d6!important;}
-.certus-topbar {display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #d9e2e6;padding:0 0 20px;margin-bottom:18px;gap:20px;}
-.certus-product {display:flex;align-items:center;gap:13px;font-size:1.4rem;font-weight:600;}
-.certus-product img {width:30px;height:28px;object-fit:contain;}
-.certus-product-kind {margin-left:8px;padding-left:20px;border-left:1px solid #cbd7dd;font-size:.8rem;font-weight:400;color:#536775;}
-.certus-pill {font-family:'IBM Plex Mono',monospace;font-size:.6rem;color:#536775;border:1px solid #cbd7dd;border-radius:4px;padding:6px 9px;letter-spacing:.07em;white-space:nowrap;}
-.certus-stepper {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0;margin:0 0 24px;list-style:none;}
-.certus-stepper li {display:flex;gap:9px;align-items:flex-start;padding:13px 10px;border-bottom:2px solid #d8e1e6;}
-.certus-stepper li.current {background:#e2eeee;border-bottom-color:#007A7C;border-radius:5px 5px 0 0;}
-.certus-step-number {font-family:'IBM Plex Mono',monospace;font-size:.7rem;line-height:1.65;color:#536775;}
-.certus-stepper strong {font-size:.79rem;font-weight:600;display:block;line-height:1.5;}
-.certus-stepper small {font-size:.63rem;display:block;color:#657783;margin-top:3px;line-height:1.35;}
-.certus-stepper .current strong,.certus-stepper .current .certus-step-number {color:#006768;}
-.certus-section-heading {margin:2px 0 12px;}
-.certus-section-heading h1 {margin:4px 0 8px;line-height:1.2;}
-.certus-section-heading>p:last-child {color:#536775;font-size:.93rem;max-width:850px;line-height:1.65;}
+.certus-topbar {display:flex;justify-content:space-between;align-items:center;background:#102B3F;border:1px solid #244154;border-radius:8px;padding:17px 24px;margin-bottom:18px;gap:20px;box-shadow:0 5px 18px rgba(16,43,63,.12);}
+.certus-product {display:flex;align-items:center;gap:18px;color:#FFFFFF;}
+.certus-product img {display:block;width:48px;height:42px;object-fit:contain;flex:none;}
+.certus-product-title {display:flex;flex-direction:column;justify-content:center;gap:1px;line-height:1.1;}
+.certus-product-title .certus-company {font-family:'IBM Plex Mono',monospace;font-size:.66rem;font-weight:600;letter-spacing:.17em;color:#8ED0CC;}
+.certus-product-title .certus-tool {font-size:1.5rem;font-weight:600;letter-spacing:-.03em;color:#FFFFFF;}
+.certus-product-kind {margin-left:12px;padding-left:22px;border-left:1px solid #5b7281;font-size:.83rem;font-weight:400;color:#D2E0E6;}
+.certus-pill {font-family:'IBM Plex Mono',monospace;font-size:.6rem;color:#E4F3F2;border:1px solid #6a8790;border-radius:4px;padding:6px 9px;letter-spacing:.07em;white-space:nowrap;}
+.certus-stepper {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:0;margin:0 0 22px;list-style:none;border:1px solid #b9c8d2;border-radius:6px;overflow:hidden;background:#fff;}
+.certus-stepper li {display:flex;flex-direction:column;gap:9px;padding:17px 16px 16px;border-right:1px solid #d5dfe5;border-bottom:4px solid transparent;min-width:0;}
+.certus-stepper li:last-child {border-right:0;}
+.certus-stepper li.current {background:#102B3F;border-bottom-color:#3BC4BA;}
+.certus-stepper li.previous {background:#edf4f4;border-bottom-color:#87aaa9;}
+.certus-step-number {font-family:'IBM Plex Sans',sans-serif;font-size:1.65rem;font-weight:600;line-height:1;color:#607889;font-variant-numeric:tabular-nums;letter-spacing:-.04em;}
+.certus-stepper strong {font-size:1.1rem;font-weight:600;display:block;line-height:1.3;color:#203e52;}
+.certus-stepper small {font-size:.78rem;display:block;color:#536775;margin-top:5px;line-height:1.4;}
+.certus-stepper .current strong {color:#fff;}
+.certus-stepper .current .certus-step-number {color:#78dbd1;}
+.certus-stepper .current small {color:#d1dfe8;}
+.certus-section-heading {display:flex;gap:20px;align-items:flex-start;margin:4px 0 16px;padding:8px 0 20px;border-bottom:1px solid #bacbd5;}
+.certus-section-number {flex:none;display:grid;place-items:center;width:66px;height:76px;border-left:4px solid #007A7C;background:#d1dfe6;color:#102B3F;font-size:2.4rem;font-weight:600;line-height:1;letter-spacing:-.05em;}
+.certus-section-category {font-family:'IBM Plex Sans',sans-serif!important;font-size:.85rem!important;font-weight:600;letter-spacing:.08em;line-height:1.3;margin:0 0 7px;color:#007174;}
+.certus-section-heading h1 {margin:0 0 8px;padding:0;line-height:1.2;font-size:2.05rem;}
+.certus-section-description {color:#415d70;font-size:.98rem;max-width:850px;line-height:1.5;margin:0;}
+.certus-guide {background:#fff;border:1px solid #b9cbd5;border-radius:6px;overflow:hidden;}
+.certus-guide-title {padding:18px 22px;background:#f2f6f8;border-bottom:1px solid #d5dfe5;}
+.certus-guide-title>span {font-size:.73rem;font-weight:600;letter-spacing:.1em;color:#007174;}
+.certus-guide-title h2 {font-size:1.17rem;margin:5px 0 0;padding:0;letter-spacing:-.02em;}
+.certus-guide ol {list-style:none;padding:0 22px;margin:0;}
+.certus-guide li {display:flex;gap:12px;padding:16px 0;border-bottom:1px solid #e0e7eb;}
+.certus-guide li:last-child {border:0;}
+.certus-guide li>span {flex:none;display:grid;place-items:center;width:26px;height:26px;background:#e4eff0;color:#007174;font-weight:600;font-size:.9rem;border-radius:3px;}
+.certus-guide h3 {font-size:.98rem;margin:0 0 5px;padding:0;line-height:1.35;letter-spacing:0;}
+.certus-guide p {font-size:.86rem;margin:0;line-height:1.5;color:#536775;}
+.certus-guide footer {padding:12px 22px;background:#f2f6f8;border-top:1px solid #d5dfe5;color:#536775;font-size:.77rem;line-height:1.5;}
 .certus-eyebrow {font-family:'IBM Plex Mono',monospace!important;font-size:.65rem!important;letter-spacing:.12em;line-height:1.5;color:#536775;margin:0;}
 .certus-note {padding:22px;background:#fff;border:1px solid #dce4e8;border-radius:8px;border-top:3px solid #007A7C;margin:0 0 16px;}
 .certus-note h3 {margin:0 0 9px;font-size:1rem;}.certus-note p {margin:0;color:#536775;line-height:1.7;font-size:.84rem;}
@@ -59,6 +79,6 @@ div[class*="_viewport"] {background:#fff;}
 .certus-verdict.pass {background:#edf6f1;border-color:#388063;}.certus-verdict.fail {background:#fcf0ed;border-color:#bb543d;}.certus-verdict.pending {background:#fff6e8;border-color:#ac7829;}
 [data-testid="stTabs"] [data-baseweb="tab-list"] {gap:24px;border-bottom:1px solid #d9e2e6;}
 [data-testid="stTabs"] [data-baseweb="tab"] {font-weight:600;}
-@media(max-width:1100px) {.certus-stepper small{display:none;}[data-testid="stMainBlockContainer"]{padding:2rem 1.25rem;}}
-@media(max-width:700px) {.certus-stepper{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;}.certus-product-kind{display:none;}.certus-pill{font-size:.52rem;}.certus-product{font-size:1.2rem;}.certus-topbar{gap:8px;}.certus-section-heading h1{font-size:1.7rem;}}
+@media(max-width:1200px) {.certus-stepper li{padding:14px 10px;}.certus-stepper strong{font-size:1rem;}.certus-stepper small{font-size:.73rem;}[data-testid="stMainBlockContainer"]{padding:2rem 1.25rem;}}
+@media(max-width:700px) {.certus-stepper{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;}.certus-product-kind{display:none;}.certus-pill{font-size:.52rem;}.certus-product{gap:10px;}.certus-product img{width:38px;height:34px;}.certus-product-title .certus-tool{font-size:1.25rem;}.certus-topbar{gap:8px;padding:14px;}.certus-section-heading h1{font-size:1.7rem;}}
 @media(prefers-reduced-motion:reduce) {*,*::before,*::after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}

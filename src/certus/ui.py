@@ -43,8 +43,10 @@ def apply_theme():
 def workspace_header(stage: int):
     import streamlit as st
     st.html('<header class="certus-topbar"><div class="certus-product">'
-            f'<img src="{asset_uri("Verimech_Icon.svg")}" alt="Verimech emblem">'
-            '<span>Certus</span><span class="certus-product-kind">Simulation workspace</span>'
+            f'<img src="{asset_uri("Verimech_Icon_Reversed.svg")}" alt="Verimech emblem">'
+            '<div class="certus-product-title"><span class="certus-company">VERIMECH</span>'
+            '<span class="certus-tool">Certus</span></div>'
+            '<span class="certus-product-kind">Simulation workspace</span>'
             '</div><span class="certus-pill">DEVELOPMENT PROTOTYPE</span></header>')
     steps = []
     for i, (name, description) in enumerate(zip(STAGES, STAGE_DESCRIPTIONS)):
@@ -65,8 +67,25 @@ def sidebar_brand():
 
 def section_heading(eyebrow: str, title: str, description: str = ""):
     import streamlit as st
-    st.html(f'<div class="certus-section-heading"><p class="certus-eyebrow">{escape(eyebrow)}</p>'
-            f'<h1>{escape(title)}</h1><p>{escape(description)}</p></div>')
+    number, separator, category = eyebrow.partition(" / ")
+    marker = f'<span class="certus-section-number">{escape(number)}</span>' if separator else ''
+    st.html(f'<div class="certus-section-heading">{marker}<div>'
+            f'<p class="certus-section-category">{escape(category if separator else eyebrow)}</p>'
+            f'<h1>{escape(title)}</h1><p class="certus-section-description">{escape(description)}</p></div></div>')
+
+
+def review_guide():
+    """Task guidance, not a promise of universal verification."""
+    import streamlit as st
+    st.html('<aside class="certus-guide"><div class="certus-guide-title">'
+            '<span>ANALYSIS PROTOCOL</span><h2>Your review checkpoints</h2></div>'
+            '<ol><li><span>1</span><div><h3>Review the interpretation</h3>'
+            '<p>Check dimensions, units and assumptions against your request.</p></div></li>'
+            '<li><span>2</span><div><h3>Confirm the physical setup</h3>'
+            '<p>Inspect the geometry and confirm the load and support faces.</p></div></li>'
+            '<li><span>3</span><div><h3>Assess the evidence</h3>'
+            '<p>Review results, unresolved findings and which checks ran.</p></div></li></ol>'
+            '<footer>Checks cover the reported scope. They do not certify the model.</footer></aside>')
 
 
 def note_card(title: str, body: str):

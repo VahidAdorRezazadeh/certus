@@ -126,10 +126,27 @@ def sidebar():
                      "Claude API (cloud)"],
                     index=0 if llm.CONFIG.provider == "openai" else 1)
     if kind.startswith("Claude"):
-        model = sb.text_input("model", llm.CONFIG.model if
-                              llm.CONFIG.provider == "anthropic"
-                              else "claude-sonnet-5")
+        if sb.button("Refresh Claude catalogue", disabled=not os.environ.get("ANTHROPIC_API_KEY")):
+            try:
+                S().claude_catalogue = llm.list_claude_models()
+                S().pop("claude_catalogue_error", None)
+            except RuntimeError as exc:
+                S().pop("claude_catalogue", None)
+                S().claude_catalogue_error = str(exc)
+        if S().get("claude_catalogue_error"):
+            sb.warning(S().claude_catalogue_error)
+        catalogue = S().get("claude_catalogue", [])
+        custom = "Enter a model ID"
+        options = [custom] + catalogue
+        current = llm.CONFIG.model if llm.CONFIG.provider == "anthropic" else ""
+        selected = sb.selectbox("Claude model catalogue", options,
+                                index=options.index(current) if current in options else 0,
+                                key="claude_model_choice")
+        model = (sb.text_input("Claude model ID", current, key="claude_manual_model")
+                 if selected == custom else selected)
         llm.configure(provider="anthropic", model=model)
+        sb.caption("Refresh to list models available through your API key, or enter an exact model ID. "
+                   "The language model assists interpretation and CAD; it does not set the physics verdict.")
         if not os.environ.get("ANTHROPIC_API_KEY"):
             sb.warning("ANTHROPIC_API_KEY is not set in this shell.")
     else:
@@ -168,6 +185,12 @@ def sidebar():
         sb.error("CalculiX (ccx) is not on PATH. Decks are written but "
                  "nothing is solved, so no verdict is possible.")
     S().ccx = bool(ccx)
+    with sb.expander("Why isn't Abaqus listed?"):
+        st.write("CalculiX is the only solver Certus currently executes. "
+                 "The GUI does not scan for Abaqus installations.")
+        st.caption("The command-line workflow can write an Abaqus-format input deck, "
+                   "but launching Abaqus and reading its results are not integrated. "
+                   "Installing Abaqus or adding it to PATH does not enable that integration.")
 
     with sb.expander(f"Model activity · {len(llm.CALL_LOG)} calls"):
         if llm.CALL_LOG:
@@ -207,10 +230,7 @@ def stage_ask():
                               height=230, placeholder=EXAMPLE)
         st.caption("State dimensions and units. Missing values will be asked for, not silently assumed.")
     with guide:
-        ui.note_card("A model you can review", "Check the interpreted request, inspect the part, "
-                     "and confirm the load and support faces before a simulation runs.")
-        ui.note_card("Evidence, not just a contour", "The final workspace separates computed results, "
-                     "unresolved findings, checks that ran, and checks that did not run.")
+        ui.review_guide()
     c1, c2 = st.columns(2)
     img = c1.file_uploader("Sketch or photo of the part (optional)",
                            type=["png", "jpg", "jpeg", "webp", "gif"])

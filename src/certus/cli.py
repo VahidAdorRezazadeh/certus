@@ -8,7 +8,7 @@ def gui():
     app = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
     sys.argv = ["streamlit", "run", app,
                 "--theme.base=light", "--theme.primaryColor=#007A7C",
-                "--theme.backgroundColor=#F4F7F8", "--theme.secondaryBackgroundColor=#FFFFFF",
+                "--theme.backgroundColor=#E4EBF0", "--theme.secondaryBackgroundColor=#FFFFFF",
                 "--theme.textColor=#102B3F", "--browser.gatherUsageStats=false"] + sys.argv[1:]
     sys.exit(stcli.main())
 

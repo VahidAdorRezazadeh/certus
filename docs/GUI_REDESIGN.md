@@ -66,3 +66,19 @@ dependencies installed.
 
 No claim is made that this change validates the physics, fixes the prototype's
 known wrong-load-face blind spot, or broadens its solver capabilities.
+
+## 28 September: workflow and first-page refinement
+
+- Larger IBM Plex Sans stage numbers and titles; navy active stage with a teal marker.
+- Stronger numbered section headings across all six stages.
+- Replaced the first-page slogans with a single, structured review-checkpoint panel.
+- Claude catalogue refresh uses the account's Models API, with manual ID entry and
+  explicit failure handling. Install `.[claude]` if Claude support is missing.
+- Sidebar explains why a local Abaqus installation is not an executable backend.
+
+Validation this update: 32 viewer tests and 3 catalogue unit tests passed. The real
+Streamlit first page loaded without exceptions through AppTest; catalogue refresh,
+selection, manual entry and error recovery passed with a stub API. No live Claude
+request, new full solver run, or Windows run was performed. The cloud browser blocked the local preview connection. The supplied PNG is an
+illustrative layout preview, not a browser screenshot; native controls and connection
+messages can differ. Visual browser QA remains outstanding.
