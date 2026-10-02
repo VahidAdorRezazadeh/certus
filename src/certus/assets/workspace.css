@@ -84,3 +84,15 @@ div[class*="_viewport"] {background:#fff;}
 @media(max-width:1200px) {.certus-stepper li{padding:14px 10px;}.certus-stepper strong{font-size:1rem;}.certus-stepper small{font-size:.73rem;}[data-testid="stMainBlockContainer"]{padding:5rem 1.25rem 2rem;}}
 @media(max-width:700px) {.certus-stepper{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;}.certus-product-kind{display:none;}.certus-pill{font-size:.52rem;}.certus-product{gap:10px;}.certus-product img{width:38px;height:34px;}.certus-product-title .certus-tool{font-size:1.25rem;}.certus-topbar{gap:8px;padding:14px;}.certus-section-heading h1{font-size:1.7rem;}}
 @media(prefers-reduced-motion:reduce) {*,*::before,*::after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}
+
+/* Keep expanded and hovered sidebar sections on the dark surface. */
+[data-testid="stSidebar"] [data-testid="stExpander"] details,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:focus,
+[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+  background:#18384d !important; color:#F4F7F8 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary svg {color:#F4F7F8 !important;}
+[data-testid="stSidebar"] [data-baseweb="select"] p {color:#102B3F;}

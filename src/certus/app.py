@@ -31,7 +31,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from certus import llm
+from certus import llm, discovery
 from certus import intent as INT
 from certus import ui
 
@@ -113,6 +113,10 @@ def badge(status: str) -> str:
 # sidebar: the language model and the solver
 # ---------------------------------------------------------------------------
 
+def abaqus_available():
+    return bool(discovery.find_abaqus())
+
+
 def sidebar():
     sb = st.sidebar
     with sb:
@@ -121,58 +125,64 @@ def sidebar():
     sb.caption("Local workspace · CalculiX solver")
     sb.divider()
     sb.subheader("Language model")
-    kind = sb.radio("Where does the language model run?",
-                    ["On this computer (Ollama, LM Studio, ...)",
-                     "Claude API (cloud)"],
-                    index=0 if llm.CONFIG.provider == "openai" else 1)
-    if kind.startswith("Claude"):
-        if sb.button("Refresh Claude catalogue", disabled=not os.environ.get("ANTHROPIC_API_KEY")):
+    provider = sb.selectbox("Provider", ["Local models", "Claude", "OpenAI-compatible server"],
+                            index=1 if llm.CONFIG.provider == "anthropic" else 0, key="llm_provider")
+    if provider == "Claude":
+        refresh = sb.button("Refresh models", key="refresh_cloud_models")
+        if (refresh or "claude_catalogue" not in S()) and os.environ.get("ANTHROPIC_API_KEY"):
             try:
                 S().claude_catalogue = llm.list_claude_models()
                 S().pop("claude_catalogue_error", None)
             except RuntimeError as exc:
-                S().pop("claude_catalogue", None)
+                S().claude_catalogue = []
                 S().claude_catalogue_error = str(exc)
+        models = S().get("claude_catalogue", [])
         if S().get("claude_catalogue_error"):
             sb.warning(S().claude_catalogue_error)
-        catalogue = S().get("claude_catalogue", [])
-        custom = "Enter a model ID"
-        options = [custom] + catalogue
-        current = llm.CONFIG.model if llm.CONFIG.provider == "anthropic" else ""
-        selected = sb.selectbox("Claude model catalogue", options,
-                                index=options.index(current) if current in options else 0,
-                                key="claude_model_choice")
-        model = (sb.text_input("Claude model ID", current, key="claude_manual_model")
-                 if selected == custom else selected)
-        llm.configure(provider="anthropic", model=model)
-        sb.caption("Refresh to list models available through your API key, or enter an exact model ID. "
-                   "The language model assists interpretation and CAD; it does not set the physics verdict.")
         if not os.environ.get("ANTHROPIC_API_KEY"):
-            sb.warning("ANTHROPIC_API_KEY is not set in this shell.")
+            sb.caption("Set ANTHROPIC_API_KEY in the shell running Certus to load your Claude models.")
+        llm.configure(provider="anthropic")
+        source_key = "claude"
     else:
-        presets = {"Ollama": llm.DEFAULT_BASE["ollama"],
-                   "LM Studio": llm.DEFAULT_BASE["lmstudio"], "other": None}
-        names = list(presets)
-        start = next((i for i, n in enumerate(names)
-                      if presets[n] == llm.CONFIG.base_url), 2)
-        preset = sb.selectbox("server", names, index=start)
-        base = sb.text_input("server address",
-                             presets[preset] or llm.CONFIG.base_url)
-        llm.configure(provider="openai", base_url=base)
-        models = llm.list_models()
-        if models:
-            cur = llm.CONFIG.model if llm.CONFIG.model in models else models[0]
-            model = sb.selectbox("model", models, index=models.index(cur))
+        if provider == "Local models":
+            refresh = sb.button("Scan this computer")
+            if refresh or "local_discovery" not in S():
+                S().local_discovery = discovery.scan_local_models()
+            detected = S().local_discovery
+            servers = detected["servers"]
+            selected = sb.selectbox("Model server", range(len(servers)),
+                                    index=next((i for i, x in enumerate(servers) if x["models"]), 0),
+                                    key="local_server", format_func=lambda i: servers[i]["name"] +
+                                    (" · available" if servers[i]["models"] else " · offline"))
+            server = servers[selected]
+            base = server["url"]
+            models = server["models"]
+            if not models:
+                sb.caption("Start this model server, then scan again to select a model.")
+            if detected["ollama_installed"]:
+                sb.caption("Ollama models on disk: " + ", ".join(detected["ollama_installed"]))
+            if detected.get("lmstudio_files"):
+                sb.caption("LM Studio files on disk: " + ", ".join(detected["lmstudio_files"]))
+            if detected["runtimes"]:
+                sb.caption("Installed command-line runtimes: " + ", ".join(detected["runtimes"]))
         else:
-            sb.caption("server not reachable, or it lists no models. "
-                       "Type the model name.")
-            model = sb.text_input(
-                "model", "" if llm.CONFIG.model.startswith("claude")
-                else llm.CONFIG.model, placeholder="for example qwen2.5vl:32b")
-        llm.configure(model=model)
-        sb.caption("A sketch or photo needs a vision model "
-                   "(for example qwen2.5vl or llama3.2-vision in Ollama). "
-                   "Writing build123d code needs a strong coding model.")
+            base = sb.text_input("API base URL", llm.CONFIG.base_url)
+            if sb.button("Refresh models", key="refresh_server_models") or S().get("catalogue_url") != base:
+                S().server_catalogue = discovery.server_models(base)
+                S().catalogue_url = base
+            models = S().get("server_catalogue", [])
+        llm.configure(provider="openai", base_url=base)
+        source_key = base
+        sb.caption("For images, select a model with vision support.")
+    if models:
+        current = llm.CONFIG.model
+        model = sb.selectbox("Model", models,
+                             index=models.index(current) if current in models else 0,
+                             key="model_" + source_key)
+    else:
+        model = sb.text_input("Model ID", "", key="manual_" + source_key,
+                              placeholder="Exact model ID from your provider")
+    llm.configure(model=model)
     if sb.button("Test the connection"):
         ok, msg = llm.ping()
         (sb.success if ok else sb.error)(msg)
@@ -185,12 +195,19 @@ def sidebar():
         sb.error("CalculiX (ccx) is not on PATH. Decks are written but "
                  "nothing is solved, so no verdict is possible.")
     S().ccx = bool(ccx)
-    with sb.expander("Why isn't Abaqus listed?"):
-        st.write("CalculiX is the only solver Certus currently executes. "
-                 "The GUI does not scan for Abaqus installations.")
-        st.caption("The command-line workflow can write an Abaqus-format input deck, "
-                   "but launching Abaqus and reading its results are not integrated. "
-                   "Installing Abaqus or adding it to PATH does not enable that integration.")
+    abaqus_override = sb.text_input("Abaqus launcher (optional)",
+                                    os.environ.get("CERTUS_ABAQUS_COMMAND", ""),
+                                    placeholder="C:/SIMULIA/Commands/abaqus.bat")
+    if abaqus_override:
+        os.environ["CERTUS_ABAQUS_COMMAND"] = abaqus_override
+    else:
+        os.environ.pop("CERTUS_ABAQUS_COMMAND", None)
+    abaqus = discovery.find_abaqus()
+    if abaqus:
+        sb.success(f"Abaqus found: {abaqus}")
+        sb.caption("Abaqus deck export available. Automated solve and verdict use CalculiX.")
+    else:
+        sb.caption("Abaqus not found. Set its launcher path above if installed elsewhere.")
 
     with sb.expander(f"Model activity · {len(llm.CALL_LOG)} calls"):
         if llm.CALL_LOG:
@@ -643,7 +660,7 @@ def stage_verdict():
                         "post-solve checks..."):
             with captured("simulation"):
                 S().rd = MA.run(S().step, "gui", **_run_args(),
-                                solvers=("calculix",),
+                                solvers=("calculix", "abaqus") if abaqus_available() else ("calculix",),
                                 target_size=S().form["size"],
                                 solve_with="calculix",
                                 run_root=session_dir())
@@ -714,6 +731,12 @@ def stage_verdict():
                 with open(rep, encoding="utf-8", errors="replace") as stream:
                     st.text(stream.read())
         st.download_button("Download run.json", json.dumps(meta, indent=2), "run.json", "application/json")
+        for solver, relative_path in meta.get("decks", {}).items():
+            deck_path = os.path.join(rd.path, relative_path)
+            if os.path.isfile(deck_path):
+                with open(deck_path, "rb") as stream:
+                    st.download_button(f"Download {solver} input deck", stream.read(),
+                                       f"{solver}.inp", key=f"download_{solver}_deck")
         st.caption(f"Run folder: {rd.path}")
     if st.button("Change the details and run again"):
         S().pop("rd")
