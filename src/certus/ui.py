@@ -42,12 +42,12 @@ def apply_theme():
 
 def workspace_header(stage: int):
     import streamlit as st
-    st.html('<header class="certus-topbar"><div class="certus-product">'
+    st.html('<div role="banner" class="certus-topbar"><div class="certus-product">'
             f'<img src="{asset_uri("Verimech_Icon_Reversed.svg")}" alt="Verimech emblem">'
             '<div class="certus-product-title"><span class="certus-company">VERIMECH</span>'
             '<span class="certus-tool">Certus</span></div>'
             '<span class="certus-product-kind">Simulation workspace</span>'
-            '</div><span class="certus-pill">DEVELOPMENT PROTOTYPE</span></header>')
+            '</div><span class="certus-pill">DEVELOPMENT PROTOTYPE</span></div>')
     steps = []
     for i, (name, description) in enumerate(zip(STAGES, STAGE_DESCRIPTIONS)):
         cls = "current" if i == stage else "previous" if i < stage else "upcoming"

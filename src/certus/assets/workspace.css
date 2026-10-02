@@ -5,8 +5,10 @@
 .stApp h1,.stApp h2,.stApp h3 { font-family:'IBM Plex Sans',sans-serif; font-weight:600; letter-spacing:-.025em; color:var(--certus-navy); }
 .stApp h1 { font-size:2rem; } .stApp h2 {font-size:1.3rem;} .stApp h3 {font-size:1.1rem;}
 .stApp code, .stApp pre, [data-testid="stMetricValue"] {font-family:'IBM Plex Mono',monospace;}
-[data-testid="stHeader"] { background:rgba(228,235,240,.96); }
-[data-testid="stMainBlockContainer"] {padding:2.3rem 2.6rem 3rem; max-width:1700px;}
+[data-testid="stHeader"] { background:var(--certus-paper); }
+/* Streamlit's fixed toolbar occupies the top of the page. Reserve space for it
+   so it cannot cover the product banner or crop the Verimech emblem. */
+[data-testid="stMainBlockContainer"] {padding:5rem 2.6rem 3rem; max-width:1700px;}
 [data-testid="stSidebar"] {background:#102B3F; border-right:1px solid #244154; color:#F4F7F8;}
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {padding-top:1.3rem;}
 [data-testid="stSidebar"] h2,[data-testid="stSidebar"] h3,[data-testid="stSidebar"] p,
@@ -79,6 +81,6 @@ div[class*="_viewport"] {background:#fff;}
 .certus-verdict.pass {background:#edf6f1;border-color:#388063;}.certus-verdict.fail {background:#fcf0ed;border-color:#bb543d;}.certus-verdict.pending {background:#fff6e8;border-color:#ac7829;}
 [data-testid="stTabs"] [data-baseweb="tab-list"] {gap:24px;border-bottom:1px solid #d9e2e6;}
 [data-testid="stTabs"] [data-baseweb="tab"] {font-weight:600;}
-@media(max-width:1200px) {.certus-stepper li{padding:14px 10px;}.certus-stepper strong{font-size:1rem;}.certus-stepper small{font-size:.73rem;}[data-testid="stMainBlockContainer"]{padding:2rem 1.25rem;}}
+@media(max-width:1200px) {.certus-stepper li{padding:14px 10px;}.certus-stepper strong{font-size:1rem;}.certus-stepper small{font-size:.73rem;}[data-testid="stMainBlockContainer"]{padding:5rem 1.25rem 2rem;}}
 @media(max-width:700px) {.certus-stepper{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;}.certus-product-kind{display:none;}.certus-pill{font-size:.52rem;}.certus-product{gap:10px;}.certus-product img{width:38px;height:34px;}.certus-product-title .certus-tool{font-size:1.25rem;}.certus-topbar{gap:8px;padding:14px;}.certus-section-heading h1{font-size:1.7rem;}}
 @media(prefers-reduced-motion:reduce) {*,*::before,*::after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}
