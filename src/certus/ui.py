@@ -93,6 +93,60 @@ def note_card(title: str, body: str):
     st.html(f'<aside class="certus-note"><h3>{escape(title)}</h3><p>{escape(body)}</p></aside>')
 
 
+def review_table_html(rows):
+    statuses = {"read": "Read from your text", "missing": "Missing · not stated",
+                "rejected": "Rejected · not accepted", "draft": "Draft · review",
+                "preset": "Preset · confirm"}
+    parts = ['<div class="certus-review-table"><table><caption>Engineering input review</caption>'
+             '<thead><tr><th scope="col">Field</th><th scope="col">Value</th>'
+             '<th scope="col">Status / source</th></tr></thead><tbody>']
+    group = None
+    for row in rows:
+        if row["group"] != group:
+            group = row["group"]
+            parts.append(f'<tr class="certus-review-group"><th colspan="3" scope="rowgroup">{escape(group)}</th></tr>')
+        status = row["status"] if row["status"] in statuses else "missing"
+        value = "—" if row["value"] is None else str(row["value"])
+        parts.append(f'<tr><th scope="row">{escape(row["field"])}</th>'
+                     f'<td class="certus-review-value">{escape(value)}</td><td>'
+                     f'<span class="certus-review-status {status}">{statuses[status]}</span>'
+                     f'<span class="certus-review-source">{escape(row["source"])}</span></td></tr>')
+    parts.append('</tbody></table></div>')
+    return ''.join(parts)
+
+
+def review_table(rows):
+    import streamlit as st
+    st.html(review_table_html(rows))
+
+
+def part_summary(spec):
+    """Readable draft geometry, with no editable implementation format."""
+    import streamlit as st
+    if not spec:
+        st.info("No part specification yet. Describe the geometry in the correction prompt.")
+        return
+    overall = spec.get("overall_mm") or {}
+    if not isinstance(overall, dict):
+        overall = {}
+    items = [("Part", spec.get("part_name") or "Not stated")]
+    for axis in ('x', 'y', 'z'):
+        value = overall.get(axis)
+        items.append((f"Overall {axis.upper()}", "Missing" if value is None else f"{value} mm"))
+    features = spec.get("features") or []
+    if isinstance(features, list) and features:
+        items.append(("Features", "; ".join(str(v) for v in features)))
+    holes = spec.get("holes") or []
+    if isinstance(holes, list):
+        for i, hole in enumerate(holes, 1):
+            if isinstance(hole, dict):
+                description = f"Diameter: {hole.get('diameter_mm', 'missing')} mm · axis: {hole.get('axis', 'missing')} · count: {hole.get('count', 'missing')}"
+                items.append((f"Hole {i}", description))
+    st.html('<section class="certus-spec-summary" aria-label="Draft part specification"><dl>' +
+            ''.join(f'<div><dt>{escape(label)}</dt><dd>{escape(str(value))}</dd></div>' for label, value in items) +
+            '</dl><p>Draft geometry. The built part will be measured against this specification.</p></section>')
+
+
 def status_banner(trust, headline: str):
     import streamlit as st
     kind, label = ("pass", "Passed the checks that ran") if trust is True else (

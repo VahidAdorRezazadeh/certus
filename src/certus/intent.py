@@ -47,7 +47,10 @@ Return ONLY one JSON object with these keys. Each value is an object
 {{"value": ..., "quote": "..."}} where quote is the EXACT words from the
 request that state it. If the request does not state a field, use
 {{"value": null, "quote": ""}}. Never infer, never use a default, never
-use typical values.
+use typical values. If USER CORRECTION sections are present, the latest correction
+replaces any conflicting earlier statement. Return all current fields, including
+unchanged information. Quotes must be from the user request or its corrections.
+A pressure value has units of stress; never use it as a force magnitude.
 
   "part"          value: short description of the part geometry (text)
   "question"      value: what the user wants to know, in their words

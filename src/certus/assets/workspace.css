@@ -96,3 +96,25 @@ div[class*="_viewport"] {background:#fff;}
 [data-testid="stSidebar"] [data-testid="stExpander"] summary p,
 [data-testid="stSidebar"] [data-testid="stExpander"] summary svg {color:#F4F7F8 !important;}
 [data-testid="stSidebar"] [data-baseweb="select"] p {color:#102B3F;}
+
+/* Interpretation review: grouped engineering fields, wrapped provenance. */
+.certus-review-table {border:1px solid #c3d1da;border-radius:8px;overflow:hidden;background:#f9fbfc;}
+.certus-review-table table {width:100%;border-collapse:collapse;table-layout:fixed;font-size:.86rem;line-height:1.45;}
+.certus-review-table caption {text-align:left;padding:12px 16px;color:#536775;font-size:.75rem;font-weight:600;letter-spacing:.05em;}
+.certus-review-table thead {background:#102B3F;color:#fff;}
+.certus-review-table thead th {padding:11px 14px;text-align:left;font-weight:600;}
+.certus-review-table thead th:first-child {width:26%;}
+.certus-review-table thead th:nth-child(2) {width:31%;}
+.certus-review-table tbody th,.certus-review-table td {text-align:left;vertical-align:top;padding:12px 14px;border-bottom:1px solid #dbe4e9;overflow-wrap:anywhere;}
+.certus-review-table tbody th {font-weight:600;color:#102B3F;}
+.certus-review-table .certus-review-group th {background:#e4eef1;color:#006467;font-size:.78rem;padding:10px 14px;letter-spacing:.03em;}
+.certus-review-table .certus-review-value {color:#102B3F;}
+.certus-review-status {display:block;font-size:.72rem;font-weight:600;margin-bottom:5px;}
+.certus-review-status.read {color:#17644d;}.certus-review-status.missing {color:#775300;}
+.certus-review-status.rejected {color:#a43827;}.certus-review-status.draft,.certus-review-status.preset {color:#36576e;}
+.certus-review-source {display:block;color:#536775;font-size:.77rem;}
+.certus-spec-summary {background:#f9fbfc;border:1px solid #c3d1da;border-top:3px solid #007A7C;border-radius:8px;padding:8px 18px 16px;}
+.certus-spec-summary dl {margin:0;}.certus-spec-summary dl div {display:grid;grid-template-columns:110px 1fr;gap:14px;padding:12px 0;border-bottom:1px solid #dbe4e9;}
+.certus-spec-summary dt {font-weight:600;font-size:.86rem;color:#102B3F;}.certus-spec-summary dd {margin:0;font-size:.86rem;color:#102B3F;overflow-wrap:anywhere;}
+.certus-spec-summary p {margin:14px 0 0;font-size:.78rem;color:#536775;}
+@media(max-width:700px) {.certus-review-table table{font-size:.78rem;}.certus-review-table tbody th,.certus-review-table td,.certus-review-table thead th{padding:9px 8px;}.certus-spec-summary dl div{grid-template-columns:90px 1fr;}}

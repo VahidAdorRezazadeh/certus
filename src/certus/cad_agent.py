@@ -90,10 +90,17 @@ Return ONLY a JSON object, no prose, no markdown fences. Schema:
   ],
   "target_volume_mm3": <float or null>,
   "features": ["short phrase per distinct feature"],
-  "assumptions": ["anything you inferred rather than read"]
+  "assumptions": ["anything you inferred rather than read"],
+  "questions": ["missing or ambiguous geometry information the user must supply"]
 }
 
 Rules:
+- Later USER CORRECTION sections replace earlier conflicting statements. Keep
+  unchanged geometry information.
+- Put unresolved geometry questions (shape, dimensions, units or feature
+  locations) in questions. Use [] only when geometry is sufficiently defined.
+  Do not assume units for bare dimensions, a cross-section shape, hole locations
+  or an unstated dimension. Set affected numeric fields to null and ask.
 - overall_mm is the OVERALL bounding box of the finished part, not one feature.
 - If a dimension is not stated and cannot be read from the image, set it to null
   and record the reason in "assumptions". Never invent a number silently.

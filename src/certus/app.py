@@ -31,7 +31,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from certus import llm, discovery
+from certus import llm, discovery, review
 from certus import intent as INT
 from certus import ui
 
@@ -259,15 +259,12 @@ def stage_ask():
                  disabled=not prompt.strip()):
         # Re-entering the workflow must not reuse geometry or results from an
         # earlier request. Keep the display preferences and connection settings.
-        for key in ("cad", "tri", "cat", "part_tri", "part_view_path", "rd", "conv",
-                    "sug_load", "sug_fix", "load_gid", "fix_gid", "form"):
-            S().pop(key, None)
-        for key in list(S().keys()):
-            if key.startswith("confirm_faces_"):
-                S().pop(key, None)
+        review.clear_derived(S())
+        S().review_revision = S().get("review_revision", 0) + 1
         S().prompt = prompt
         S().image = save_upload(img) if img is not None else None
         S().step = save_upload(stp, "input.step") if stp is not None else None
+        S().uploaded_step = stp is not None
         with st.spinner("The language model is reading your request..."):
             try:
                 S().intent = INT.read_intent(prompt, S().image)
@@ -279,9 +276,8 @@ def stage_ask():
             S().spec = None
             if not S().step:
                 from certus import cad_agent as CA
-                part_text = S().intent.get("part") or prompt
                 with captured("specification"):
-                    S().spec = CA.call_llm_spec(part_text, S().image)
+                    S().spec = CA.call_llm_spec(prompt, S().image)
         go(1)
 
 
@@ -289,61 +285,78 @@ def stage_ask():
 # 2 UNDERSTOOD
 # ---------------------------------------------------------------------------
 
-LABELS = {"part": "part", "question": "your question",
-          "load_feature": "load acts on", "fix_feature": "held at",
-          "load_kind": "load kind", "force_N": "force (N)",
-          "direction": "direction", "pressure_MPa": "pressure (MPa)",
-          "material": "material", "goal": "goal",
-          "support": "support", "yield_MPa": "yield stress (MPa)"}
-
-
 def stage_understood():
+    from certus import model_agent as MA
+    from certus import cad_agent as CA
     ui.section_heading("02 / INTERPRETATION", "Review what Certus understood",
-                       "Compare every extracted value with your words before building the model.")
+                       "Complete the engineering inputs and confirm the assumptions before building the model.")
     it: INT.Intent = S().intent
-    left, right = st.columns([1, 1])
+    uploaded = S().get("uploaded_step", bool(S().get("step") and not S().get("cad")))
+    spec = S().get("spec") or {}
+    revision = S().get("review_revision", 0)
+    material = MA.MATERIALS.get(it.get("material"))
+    left, right = st.columns([1.35, 1], gap="large")
     with left:
         st.subheader("From your text")
-        st.caption("A value is kept only if the model can quote the words "
-                   "you used, and any number must match the number and unit "
-                   "you wrote. Nothing here is a default.")
-        rows = []
-        for k in INT.FIELDS:
-            f = it.fields.get(k, INT.Field())
-            rows.append({"field": LABELS[k],
-                         "value": "" if f.value is None else str(f.value),
-                         "status": badge(f.status),
-                         "your words / reason": f.quote if f.status == "read"
-                         else f.note})
-        st.dataframe(rows, hide_index=True, width="stretch")
-    spec_valid = True
+        st.caption("Read values include your exact words. Missing and rejected inputs remain visible. "
+                   "Draft dimensions and material presets are labeled separately.")
+        ui.review_table(review.review_rows(it, None if uploaded else spec, material))
+    assumptions_ok = True
     with right:
-        if S().step:
+        if uploaded:
             st.subheader("Your CAD file")
-            st.write(f"`{os.path.basename(S().step)}` will be used as it is. "
-                     "No part is generated.")
+            st.write(f"{os.path.basename(S().step)} will be used as supplied.")
+            st.caption("Corrections update the analysis inputs. To replace this geometry, upload a new CAD file on the Ask page.")
         else:
-            st.subheader("Part specification (will be measured)")
-            spec = S().spec or {}
-            if spec.get("assumptions"):
-                st.warning("The model ASSUMED these. Check them:\n\n" +
-                           "\n".join(f"- {a}" for a in spec["assumptions"]))
-            txt = st.text_area("specification (edit if wrong)",
-                               json.dumps(spec, indent=2), height=380)
+            st.subheader("Part specification")
+            ui.part_summary(spec)
+            assumptions = spec.get("assumptions") or []
+            if assumptions:
+                st.warning("Assumptions to review:\n\n" +
+                           "\n".join(f"- {a}" for a in assumptions))
+                assumptions_ok = st.checkbox("I accept the listed geometry assumptions",
+                                              key=f"review_assumptions_{revision}")
+        st.subheader("Information needed")
+        questions = review.completion_questions(it, spec, uploaded)
+        if questions:
+            st.warning("Complete these in the correction prompt below:\n\n" +
+                       "\n".join(f"- {q}" for q in questions))
+        else:
+            st.success("Required draft inputs are present. Review them before continuing.")
+        st.caption("Load and support faces will still be confirmed on the 3D part. "
+                   "The Details page remains a final review before solving.")
+    st.divider()
+    st.subheader("Correct or complete the request")
+    st.caption("Describe the changes in plain language. Both review panels update together; "
+               "later corrections replace conflicting earlier statements.")
+    with st.form("review_correction", clear_on_submit=True):
+        correction = st.text_area("Your corrections or missing information", height=150,
+                                  placeholder="For example: the beam has a solid rectangular section, "
+                                  "200 mm wide and 50 mm thick. Apply 2 kN in -Z, not pressure.")
+        submitted = st.form_submit_button("Update interpretation", type="primary")
+    if submitted:
+        with st.spinner("Updating the interpretation and part specification..."):
             try:
-                candidate = json.loads(txt)
-                if not isinstance(candidate, dict):
-                    raise ValueError("The specification must be a JSON object.")
-                S().spec = candidate
-            except (json.JSONDecodeError, ValueError) as e:
-                spec_valid = False
-                st.error(f"not valid JSON: {e}")
+                review.apply_revision(S(), correction, INT.read_intent, CA.call_llm_spec)
+            except Exception as exc:
+                st.error(f"Could not update the interpretation ({type(exc).__name__}: {exc}). "
+                         "The previous review remains available. Submit the correction again.")
+            else:
+                st.rerun()
+    material_ok = True
+    if material:
+        material_ok = st.checkbox(
+            f"I confirm the linear-elastic {material.name} preset: E = {material.E:g} MPa, ν = {material.nu:g}",
+            key=f"review_material_{revision}")
+        st.caption("A supplied yield strength is used to check first yield; it does not define a plastic material law.")
     c1, c2 = st.columns([1, 5])
     if c1.button("Back"):
         go(0)
-    if c2.button("Use the CAD file" if S().step else "Build the part",
-                 type="primary", disabled=not spec_valid):
-        go(3 if S().step else 2)
+    if c2.button("Use the CAD file" if uploaded else "Build the part", type="primary",
+                 disabled=bool(questions) or not assumptions_ok or not material_ok):
+        if not uploaded:
+            S().step = None
+        go(3 if uploaded else 2)
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +378,7 @@ def stage_part():
                 os.chdir(session_dir())
                 try:
                     S().cad = CA.generate(
-                        S().intent.get("part") or S().prompt, S().image,
+                        S().prompt, S().image,
                         spec=S().spec, confirm=False)
                 finally:
                     os.chdir(HERE)
@@ -406,6 +419,7 @@ def stage_part():
     if passed:
         if b3.button("Use this part", type="primary"):
             S().step = cad["step"]      # already inside the session folder
+            S().uploaded_step = False
             for key in ("tri", "cat", "rd", "conv"):
                 S().pop(key, None)
             go(3)
