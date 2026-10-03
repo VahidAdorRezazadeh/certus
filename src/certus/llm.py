@@ -189,6 +189,21 @@ def json_or_none(text: str):
     return None
 
 
+def list_claude_models() -> List[str]:
+    """Explicit catalogue refresh. Never infer available models from a static list."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError("Set ANTHROPIC_API_KEY before refreshing the Claude catalogue.")
+    try:
+        from anthropic import Anthropic
+        with Anthropic(timeout=15.0, max_retries=0) as client:
+            return sorted({m.id for m in client.models.list(limit=100) if m.id})
+    except ImportError:
+        raise RuntimeError('Install Claude support: python -m pip install -e ".[claude]"') from None
+    except Exception:
+        raise RuntimeError("Could not retrieve the Claude catalogue. Check your API key and connection; "
+                           "you can still enter a model ID manually.") from None
+
+
 def list_models() -> List[str]:
     """Models the configured OpenAI-compatible server offers. Empty list if
     the server is not reachable. Used by the GUI to fill a dropdown."""

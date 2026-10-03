@@ -1,0 +1,37 @@
+name: Certus GUI checks
+on:
+  pull_request:
+    paths:
+      - 'src/certus/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/gui-checks.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y libglu1-mesa calculix-ccx
+      - name: Install package and GUI dependencies
+        run: python -m pip install -e '.[all]'
+      - name: Viewer and brand regression tests
+        run: python -m unittest discover -s tests -p test_viewer.py -v
+      - name: Interpretation review and correction regression tests
+        run: python -m unittest discover -s tests -p test_review.py -v
+      - name: Geometry measurement, camera and drawing regression tests
+        run: python -m unittest discover -s tests -p test_geometry_review.py -v
+      - name: GUI end-to-end with honest and lying language-model stubs
+        env:
+          CERTUS_RUNS: ${{ runner.temp }}/certus-runs
+        run: python tests/test_gui.py
+      - name: Check packaged brand assets
+        run: python -c "from certus import ui; assert 'IBM Plex Sans' in ui.stylesheet(); assert ui.asset_uri('Verimech_Icon.svg')"
