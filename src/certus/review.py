@@ -16,7 +16,7 @@ GROUPS = (
                     ('pressure_MPa', 'Pressure (MPa)'))),
     ('05 · Analysis goal', (('goal', 'Analysis goal'), ('question', 'Your question'))),
 )
-DERIVED_KEYS = ('cad', 'tri', 'cat', 'part_tri', 'part_view_path', 'rd', 'conv',
+DERIVED_KEYS = ('part_warnings_accepted', 'cad_error', 'cad_retry', 'part_cat', 'cad', 'tri', 'cat', 'part_tri', 'part_view_path', 'rd', 'conv',
                 'sug_load', 'sug_fix', 'load_gid', 'fix_gid', 'form')
 
 

@@ -158,6 +158,31 @@ def status_banner(trust, headline: str):
     st.caption("A check verdict applies only to the checks listed below. It is not a certification of the model or result.")
 
 
+def measurement_html(results):
+    names = {'geometry_valid': 'Solid validity', 'single_solid': 'Solid count',
+             'overall_x': 'Overall X dimension', 'overall_y': 'Overall Y dimension',
+             'overall_z': 'Overall Z dimension', 'bbox_fill': 'Bounding-box fill ratio',
+             'min_face_count': 'Face count', 'volume': 'Solid volume',
+             'no_unexpected_holes': 'Unexpected holes'}
+    body = []
+    for result in results:
+        status = 'PASS' if result['status'] == 'PASS' else 'FAIL' if result['critical'] else 'WARN'
+        name = names.get(result['name'], result['name'].replace('_', ' ').title())
+        body.append(f'<article class="certus-check-row {status.lower()}">'
+                    f'<div><h4>{escape(name)}</h4><span>{status}</span></div>'
+                    f'<p>{escape(result["detail"])}</p></article>')
+    count = sum(r['status'] == 'PASS' for r in results)
+    return ('<section class="certus-measurements" aria-label="Geometry measurement evidence">'
+            f'<header><span>MEASURED GEOMETRY</span><strong>{count} / {len(results)} checks passed</strong></header>' +
+            ''.join(body) + '<footer>Arithmetic checks against the confirmed part specification. '
+            'These checks do not verify the simulation physics.</footer></section>')
+
+
+def measurement_evidence(results):
+    import streamlit as st
+    st.html(measurement_html(results))
+
+
 def metric_row(meta):
     import streamlit as st
     values = (("Load-point displacement", meta.get("load_point_displacement_mm"), "mm"),
@@ -179,11 +204,15 @@ def view_options(key: str):
     return dict(view=view, projection=projection.lower(), show_edges=edges)
 
 
-def geometry_view(tri, load_tags=(), fix_tags=(), hover=None, *, key="geometry", load_vector=None):
+def geometry_view(tri, load_tags=(), fix_tags=(), hover=None, *, key="geometry", load_vector=None,
+                  load_kind="force", support_label="Selected support face"):
     import streamlit as st
     from certus import viewer
     with st.container(border=True, key=f"{key}_viewport"):
-        st.markdown("**Geometry viewport**")
+        title, fit = st.columns([4,1])
+        title.markdown("**Geometry viewport**")
+        if fit.button("Fit part", key=f"{key}_fit"):
+            st.session_state[f"{key}_camera_revision"] = st.session_state.get(f"{key}_camera_revision",0) + 1
         opts = view_options(key)
         with st.expander("Display settings"):
             a, b, c = st.columns(3)
@@ -192,12 +221,18 @@ def geometry_view(tri, load_tags=(), fix_tags=(), hover=None, *, key="geometry",
             labels = c.toggle("Face labels", value=False, key=f"{key}_labels")
         fig = viewer.faces_figure(tri, load_tags, fix_tags, hover, height=560,
                                   opacity=opacity, show_axes=axes, show_labels=labels,
-                                  load_vector=load_vector, **opts)
+                                  load_vector=load_vector, load_kind=load_kind,
+                                  support_label=support_label, **opts)
+        fig.layout.uirevision += f"-{st.session_state.get(f'{key}_camera_revision',0)}"
         st.plotly_chart(fig, width="stretch", theme=None, key=f"{key}_plot", config=PLOT_CONFIG)
-        st.html('<div class="certus-viewport-footer"><span><i class="load"></i>Load selection</span>'
-                '<span><i class="support"></i>Support selection</span>'
-                '<span>Drag to orbit · right-drag to pan · toolbar to zoom / export</span></div>')
-        st.caption("Surface triangulation for viewing; not the solver mesh. Coordinates in mm. Arrows, when shown, indicate force direction only.")
+        if load_tags or fix_tags:
+            st.html('<div class="certus-viewport-footer"><span><i class="load"></i>Selected load faces</span>'
+                    '<span><i class="support"></i>Selected support faces</span></div>')
+        else:
+            st.caption("Face roles have not been assigned. Load and support faces are selected at the next step."
+                       if key == "part" else "Choose load and support features to preview their locations.")
+        st.caption("Drag to orbit · scroll to zoom · hover for face names and coordinates · Fit part to reset. "
+                   "Surface triangulation is for viewing, not the solver mesh. Arrows and support symbols are schematic.")
 
 
 def results_view(deck, frd, *, key="results"):

@@ -367,65 +367,101 @@ def stage_part():
     from certus import cad_agent as CA
     ui.section_heading("03 / GEOMETRY", "Inspect the generated part",
                        "Geometric measurements control this gate. The language model's visual review is advisory.")
-    if "cad" not in S():
-        with st.spinner("Writing build123d code, building, measuring. "
-                        "A local model can take several minutes."):
-            # cad_agent writes part.step, part_spec.json ... into the
-            # current folder. Run it inside this session's folder so the
-            # reference bracket in the repo is never overwritten. (chdir is
-            # process wide: fine for a one-user local app.)
-            with captured("CAD generation"):
-                os.chdir(session_dir())
-                try:
-                    S().cad = CA.generate(
-                        S().prompt, S().image,
-                        spec=S().spec, confirm=False)
-                finally:
-                    os.chdir(HERE)
+    if "cad" not in S() and "cad_error" not in S():
+        with st.spinner("Writing build123d code, building, measuring. A local model can take several minutes."):
+            log = io.StringIO()
+            retry = S().pop("cad_retry", {})
+            try:
+                with contextlib.redirect_stdout(log):
+                    os.chdir(session_dir())
+                    S().cad = CA.generate(S().prompt, S().image, spec=S().spec, confirm=False,
+                                          prior_code=retry.get("code"), prior_feedback=retry.get("feedback"))
+            except Exception as exc:
+                S().cad_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                os.chdir(HERE)
+                S().setdefault("logs", []).append(("CAD generation", log.getvalue()))
+    if "cad_error" in S():
+        st.error("The CAD build did not finish. Correct the geometry description or retry the build.")
+        with st.expander("Build error details"):
+            st.write(S().cad_error)
+        back, retry = st.columns(2)
+        if back.button("Correct the specification"):
+            S().pop("cad_error", None)
+            go(1)
+        if retry.button("Retry the build", type="primary"):
+            S().pop("cad_error", None)
+            st.rerun()
+        return
     cad = S().cad
-    for k in ("step", "drawing"):
+    for k in ("step", "drawing", "stl"):
         if cad.get(k) and not os.path.isabs(cad[k]):
             cad[k] = os.path.join(session_dir(), cad[k])
-    v = cad.get("verdict", "")
-    passed = v.startswith("PASS")
-    (st.success if passed else st.error)(f"Measured verification: {v}")
+    # Re-run pure arithmetic when an existing session contains measurements
+    # from an earlier checker version; this does not invoke the model or CAD.
+    if cad.get("meas"):
+        cad["results"] = CA.check_spec(cad.get("spec") or S().spec, cad["meas"])
+    v, hard, soft = CA.verdict(cad.get("results", []))
+    cad["verdict"] = v
+    if hard:
+        st.error("Geometry does not match the specification. "
+                 "Review the failed checks below, then correct the specification or rebuild.")
+    elif soft:
+        st.warning("Geometry built successfully, with advisory measurement warnings. "
+                   "Review and acknowledge them before using the part.")
+    else:
+        st.success("Geometry built successfully and passed the measured checks.")
+    if cad.get("drawing_style") != 2 and cad.get("stl") and os.path.isfile(cad["stl"]):
+        with captured("refresh drawing preview"):
+            cad["drawing"] = CA.render_drawing(cad["stl"], os.path.join(session_dir(), "part_views_review.png"),
+                part_name=str((cad.get("spec") or {}).get("part_name", "Part")),
+                request=S().prompt, meta=cad.get("meas"), results=cad.get("results"))
+            cad["drawing_style"] = 2
     c1, c2 = st.columns([2.3, 1], gap="large")
     with c1:
         if cad.get("step") and os.path.exists(cad["step"]):
             from certus import viewer
             if S().get("part_view_path") != cad["step"]:
                 with captured("geometry preview"):
-                    _, S().part_tri = viewer.face_mesh(cad["step"])
+                    S().part_cat, S().part_tri = viewer.face_mesh(cad["step"])
                     S().part_view_path = cad["step"]
-            ui.geometry_view(S().part_tri, key="part")
+            if "part_cat" not in S():
+                with captured("face descriptions"):
+                    S().part_cat, S().part_tri = viewer.face_mesh(cad["step"])
+            ui.geometry_view(S().part_tri, hover=viewer.face_labels(S().part_cat), key="part")
         if cad.get("drawing") and os.path.exists(cad["drawing"]):
             with st.expander("Generated drawing"):
-                st.image(cad["drawing"])
+                st.image(cad["drawing"], width="stretch")
     c2.subheader("Measurement evidence")
-    c2.text(CA.report_text(cad.get("results", [])))
+    with c2:
+        ui.measurement_evidence(cad.get("results", []))
     if cad.get("visual", {}).get("match") is False:
         c2.info("Advisory visual review by the language model (it cannot "
                 "change the verdict): " +
                 "; ".join(cad["visual"].get("discrepancies") or []))
-    b1, b2, b3 = st.columns([1, 1, 4])
+    warnings_accepted = not soft
+    if soft:
+        warnings_accepted = st.checkbox("I reviewed and accept the advisory geometry warnings", key="part_warnings_accepted")
+    b1, b2, b3 = st.columns([1.6, 1.2, 2.2])
     if b1.button("Back to the specification"):
         S().pop("cad")
         S().pop("part_view_path", None)
         go(1)
     if b2.button("Build again"):
+        S().cad_retry = dict(code=cad.get("code"), feedback=CA.feedback_text(cad.get("results", []), cad.get("meas", {})))
         S().pop("cad")
         S().pop("part_view_path", None)
+        S().pop("part_warnings_accepted", None)
         st.rerun()
-    if passed:
-        if b3.button("Use this part", type="primary"):
+    if not hard:
+        if b3.button("Use this part", type="primary", disabled=not warnings_accepted):
             S().step = cad["step"]      # already inside the session folder
             S().uploaded_step = False
             for key in ("tri", "cat", "rd", "conv"):
                 S().pop(key, None)
             go(3)
     else:
-        b3.warning("Certus does not simulate a part that failed its own "
-                   "measurements. Fix the specification or build again.")
+        b3.warning("A failed critical geometry check blocks simulation. Correct the specification or rebuild.")
 
 
 # ---------------------------------------------------------------------------
@@ -493,11 +529,16 @@ def stage_faces():
                          key=f"confirm_faces_{lg}_{fg}")
     with right:
         hover = {}
+        names = viewer.face_labels(cat)
         for g in cat.groups:
             for t in g.tags:
-                hover[t] = g.summary()
+                hover[t] = names.get(t, g.summary())
         ui.geometry_view(tri, groups[lg].tags if lg is not None else (),
-                         groups[fg].tags if fg is not None else (), hover, key="faces")
+                         groups[fg].tags if fg is not None else (), hover, key="faces",
+                         load_vector=_vector(dict(force=S().intent.get("force_N"), direction=S().intent.get("direction")))
+                         if S().intent.get("load_kind") == "force" else None,
+                         load_kind=S().intent.get("load_kind") or "force",
+                         support_label=S().intent.get("support") or "Selected support face")
     c1, c2 = st.columns([1, 5])
     if c1.button("Back"):
         go(1)
@@ -530,7 +571,7 @@ def _num(label, key, it, **kw):
 
 
 def stage_details():
-    from certus import model_agent as MA
+    from certus import model_agent as MA, viewer
     ui.section_heading("05 / MODEL DEFINITION", "Complete the analysis model",
                        "Review the load, material and analysis goal. No solve starts until the required inputs are present.")
     st.caption("Values read from your text are filled in. Empty boxes are "
@@ -582,7 +623,9 @@ def stage_details():
             cat = S().cat
             vector = _vector(dict(force=force, direction=direction)) if kind == "force" else None
             ui.geometry_view(S().tri, cat.group(S().load_gid).tags,
-                             cat.group(S().fix_gid).tags, key="details", load_vector=vector)
+                             cat.group(S().fix_gid).tags, hover=viewer.face_labels(cat), key="details",
+                             load_vector=vector, load_kind=kind or "force",
+                             support_label=support or "Selected support face")
     b1, b2 = st.columns([1, 5])
     if b1.button("Back"):
         go(3)

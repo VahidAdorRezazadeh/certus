@@ -188,7 +188,9 @@ class MeshTests(unittest.TestCase):
         f.to_json()
         self.assertEqual(f.data[0].color,'#df623e')
         self.assertEqual(f.layout.scene.camera.projection.type,'orthographic')
-        self.assertEqual(f.layout.scene.camera.eye.z,2.1)
+        self.assertGreater(f.layout.scene.camera.eye.z,0)
+        self.assertEqual(f.layout.scene.camera.eye.x,0)
+        self.assertEqual(f.layout.scene.camera.eye.y,0)
 
 
 class BrandTests(unittest.TestCase):

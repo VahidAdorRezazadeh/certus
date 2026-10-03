@@ -27,6 +27,8 @@ jobs:
         run: python -m unittest discover -s tests -p test_viewer.py -v
       - name: Interpretation review and correction regression tests
         run: python -m unittest discover -s tests -p test_review.py -v
+      - name: Geometry measurement, camera and drawing regression tests
+        run: python -m unittest discover -s tests -p test_geometry_review.py -v
       - name: GUI end-to-end with honest and lying language-model stubs
         env:
           CERTUS_RUNS: ${{ runner.temp }}/certus-runs

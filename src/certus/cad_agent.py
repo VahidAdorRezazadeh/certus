@@ -67,8 +67,8 @@ MESH_TOL, MESH_ANG_TOL, DPI = 0.05, 0.20, 500
 
 SHEET_BG, INK, FAINT = "#ffffff", "#1b1f24", "#9aa3ad"
 DIM_COLOR, OK_COLOR, BAD_COLOR = "#b3122f", "#1c7c4a", "#b3122f"
-FILL_NEAR, FILL_FAR = "#aeb6c0", "#c9ced6"
-BASE_RGB = np.array([0.55, 0.60, 0.68])
+FILL_NEAR, FILL_FAR = "#aac3d4", "#dce5ec"
+BASE_RGB = np.array([0.40, 0.63, 0.77])
 CREASE_DEG = 22.0
 
 
@@ -117,6 +117,8 @@ Be strict. These numbers will be measured on the built solid and used to reject 
 
 CODE_SYSTEM = """You are a CAD code generator. Output ONLY Python code using build123d.
 Rules:
+- The confirmed specification is authoritative. Later user corrections replace
+  conflicting earlier statements. Do not change dimensions to make code run.
 - Define exactly one solid named `part`.
 - Import nothing except: from build123d import *
 - Do NOT call export_step, export_stl or print. The harness does that.
@@ -507,16 +509,19 @@ def check_spec(spec: dict, m: dict) -> list:
     # The fill band is only a check when the USER stated it. A band the spec
     # model proposed is an invented number: on the reference bracket it
     # proposed 0.15 to 0.45 against a true 0.124, which fails a correct part.
-    # Unstated, the band is the physical one: a solid fills more than 0 and
-    # less than 1 of its box, and the check is reported, not critical.
+    # A solid box has fill 1. A thin or perforated part can be arbitrarily
+    # close to zero. No narrower band is justified without a user requirement.
     stated = spec.get("bbox_fill_range_source") == "user"
-    rng = spec.get("bbox_fill_range") if stated else [0.03, 0.97]
-    lo, hi = float(rng[0]), float(rng[1])
-    out.append(_res("bbox_fill", lo <= m["bbox_fill"] <= hi,
-                    f"volume / bbox volume = {m['bbox_fill']:.3f}, expected "
-                    f"{lo:g} to {hi:g} "
-                    f"({'stated by the user' if stated else 'physical bounds; no band was stated'})",
-                    critical=False))
+    fill = float(m["bbox_fill"])
+    if stated:
+        rng = spec.get("bbox_fill_range")
+        lo, hi = float(rng[0]), float(rng[1])
+        valid = lo <= fill <= hi
+        detail = f"volume / bbox volume = {fill:.6g}, required {lo:g} to {hi:g} (stated by the user)"
+    else:
+        valid = np.isfinite(fill) and 0 < fill <= 1 + 1e-9
+        detail = f"volume / bbox volume = {fill:.6g}; physical bounds: greater than 0 and at most 1 (numerical tolerance 1e-9)"
+    out.append(_res("bbox_fill", valid, detail, critical=not stated))
 
     mf = spec.get("min_face_count")
     if mf:
@@ -690,12 +695,12 @@ class Mesh:
 # DRAWING
 # ----------------------------------------------------------------------
 def _shade(N):
-    key = np.array([-0.45, -0.80, 0.60]); key /= np.linalg.norm(key)
+    key = np.array([-0.35, -0.45, 0.82]); key /= np.linalg.norm(key)
     fill = np.array([0.85, 0.25, 0.30]); fill /= np.linalg.norm(fill)
     d1 = np.clip(N @ key, 0, 1)
     d2 = np.clip(N @ fill, 0, 1)
     d3 = np.clip(N @ np.array([0.0, 0.0, -1.0]), 0, 1)
-    inten = 0.20 + 0.72 * d1 ** 0.85 + 0.26 * d2 + 0.06 * d3
+    inten = 0.40 + 0.55 * d1 ** 0.85 + 0.20 * d2 + 0.06 * d3
     return np.clip(BASE_RGB[None, :] * inten[:, None] + (0.32 * d1 ** 22)[:, None], 0, 1)
 
 
@@ -729,7 +734,7 @@ def _draw_ortho(ax, mesh, view, label):
     ax.set_ylim(lo[1] - 0.30 * span, hi[1] + 0.10 * span)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title(label, fontsize=8.5, color=INK, pad=6, fontweight="semibold")
+    ax.set_title(label, fontsize=10.5, color=INK, pad=8, fontweight="semibold")
     return lo, hi, span
 
 
@@ -759,33 +764,35 @@ def _dim_v(ax, y0, y1, x, text, span):
 
 def _draw_iso(ax, mesh):
     cam = np.array([0.62, -0.72, 0.52]); cam /= np.linalg.norm(cam)
+    horizontal = np.cross(np.array([0., 0., 1.]), cam)
+    horizontal /= np.linalg.norm(horizontal)
+    vertical = np.cross(cam, horizontal)
+    projected = np.column_stack([mesh.V @ horizontal, mesh.V @ vertical])
+    front = mesh.N @ cam > 0
+    order = np.where(front)[0]
+    order = order[np.argsort(mesh.C[order] @ cam)]
     rgb = _shade(mesh.N)
-    order = np.argsort(mesh.C @ cam)
-    ax.add_collection3d(Poly3DCollection(mesh.V[mesh.F[order]], facecolors=rgb[order],
-                                         edgecolors=rgb[order] * 0.92, linewidths=0.15,
-                                         shade=False))
-    sil, _, _ = mesh.visible_lines(cam)
-    if sil.any():
-        ax.add_collection3d(Line3DCollection(mesh.V[mesh.E[sil]], colors=INK, linewidths=0.9))
-    lo, hi = mesh.bbox
-    d = np.maximum(hi - lo, 1e-9)
-    m = 0.02 * d.max()
-    ax.set_xlim(lo[0] - m, hi[0] + m); ax.set_ylim(lo[1] - m, hi[1] + m)
-    ax.set_zlim(lo[2] - m, hi[2] + m)
-    try:
-        ax.set_box_aspect(tuple(d), zoom=1.45)
-    except TypeError:
-        ax.set_box_aspect(tuple(d))
-    ax.set_proj_type("ortho")
-    ax.view_init(elev=24, azim=-49)
-    ax.set_axis_off()
-    L, o = 0.22 * d.max(), lo - 0.06 * d.max()
-    for vec, lab in ((np.array([L, 0, 0]), "X"), (np.array([0, L, 0]), "Y"),
-                     (np.array([0, 0, L]), "Z")):
-        p = o + vec
-        ax.plot(*zip(o, p), color=FAINT, lw=0.8)
-        ax.text(*p, lab, color=FAINT, fontsize=6.2, ha="center", va="center")
-    ax.set_title("ISOMETRIC", fontsize=8.5, color=INK, pad=-4, fontweight="semibold")
+    ax.add_collection(PolyCollection(projected[mesh.F[order]], facecolors=rgb[order],
+                                     edgecolors=rgb[order], linewidths=.15))
+    sil, crease, _ = mesh.visible_lines(cam)
+    for edges, width in ((crease, .45), (sil, .9)):
+        if edges.any():
+            ax.add_collection(LineCollection(projected[mesh.E[edges]], colors=INK,
+                                             linewidths=width))
+    lo, hi = projected.min(axis=0), projected.max(axis=0)
+    span = max(float((hi - lo).max()), 1e-9)
+    ax.set_xlim(lo[0] - .12 * span, hi[0] + .12 * span)
+    ax.set_ylim(lo[1] - .12 * span, hi[1] + .12 * span)
+    ax.set_aspect('equal'); ax.axis('off')
+    ax.set_title('ISOMETRIC', fontsize=10.5, color=INK, pad=10, fontweight='semibold')
+    # An inset coordinate triad cannot enlarge or crop the part's bounds.
+    origin = np.array([.10, .12])
+    for i, (label, color) in enumerate((('X', '#9b3f34'), ('Y', '#257954'), ('Z', '#285fa0'))):
+        vector = np.array([horizontal[i], vertical[i]]) * .065
+        tip = origin + vector
+        ax.annotate('', xy=tip, xytext=origin, xycoords='axes fraction',
+                    arrowprops=dict(arrowstyle='->', color=color, lw=1.1))
+        ax.text(*tip, label, transform=ax.transAxes, fontsize=8, color=color)
 
 
 def render_drawing(stl_path=OUT_STL, png_path=OUT_PNG, part_name="PART",
@@ -798,10 +805,10 @@ def render_drawing(stl_path=OUT_STL, png_path=OUT_PNG, part_name="PART",
     dx, dy, dz = hi - lo
     meta = dict(meta or {})
 
-    fig = plt.figure(figsize=(13.5, 5.4), facecolor=SHEET_BG)
+    fig = plt.figure(figsize=(13.5, 5.8), facecolor=SHEET_BG)
     gs = fig.add_gridspec(2, 3, height_ratios=[1, 0.155], left=0.02, right=0.98,
                           top=0.95, bottom=0.035, wspace=0.06, hspace=0.10)
-    _draw_iso(fig.add_subplot(gs[0, 0], projection="3d", facecolor=SHEET_BG), mesh)
+    _draw_iso(fig.add_subplot(gs[0, 0], facecolor=SHEET_BG), mesh)
 
     ax_f = fig.add_subplot(gs[0, 1], facecolor=SHEET_BG)
     lo2, hi2, s2 = _draw_ortho(ax_f, mesh, "front", "FRONT  (view along +Y)")
@@ -956,7 +963,7 @@ def archive_cad_run(request, spec, results, verdict_text, meas, drawing,
 def generate(request: str, image_path: str | None = None, spec: dict | None = None,
              out_step=OUT_STEP, out_stl=OUT_STL, png=OUT_PNG,
              attempts: int = MAX_ATTEMPTS, visual: bool = VISUAL_CHECK,
-             confirm: bool = True):
+             confirm: bool = True, prior_code=None, prior_feedback=None):
     """Spec -> code -> execute -> measure -> verify -> repair. Returns a dict."""
     image_path = check_image(image_path)
     if spec is None:
@@ -978,7 +985,8 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
             spec = json.load(open(OUT_SPEC))
             print("[spec] reloaded")
 
-    code, feedback, last = None, None, {}
+    code, feedback, last = prior_code, prior_feedback, {}
+    last_error = ""
     history = []
     for k in range(1, attempts + 1):
         print(f"\n[attempt {k}/{attempts}] generating code...")
@@ -986,6 +994,7 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
         ok, log, meas = run_code(code, out_step, out_stl)
 
         if not ok or meas is None:
+            last_error = (log.strip().splitlines() or ["No build output"])[-1]
             print(f"[attempt {k}] BUILD FAILED")
             print(log[-700:])
             history.append(f"  attempt {k}: BUILD FAILED. "
@@ -1000,7 +1009,7 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
                        + (f", {len(hard)} critical check(s) failed" if hard else ""))
         print(report_text(results))
         last = dict(code=code, step=out_step, stl=out_stl, mesh=OUT_MESH, meas=meas,
-                    results=results, verdict=v, spec=spec)
+                    results=results, verdict=v, spec=spec, drawing_style=2)
 
         if hard and k < attempts:
             feedback = feedback_text(results, meas)
@@ -1065,7 +1074,7 @@ def generate(request: str, image_path: str | None = None, spec: dict | None = No
             request, spec, last["results"], last["verdict"], last["meas"],
             last.get("drawing"), history, image_path)
         return last
-    raise RuntimeError("no buildable geometry produced")
+    raise RuntimeError("No buildable geometry produced after the repair attempts. " + last_error)
 
 
 
