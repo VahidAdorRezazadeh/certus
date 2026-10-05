@@ -19,7 +19,7 @@ Two runs:
 
 from __future__ import annotations
 from certus.paths import EXAMPLE_STEP
-from certus.demo import L_BRACKET, PAPER_BRACKET
+from certus.demo import L_BRACKET
 REF_STEP = str(EXAMPLE_STEP)
 import json
 import os
@@ -151,15 +151,11 @@ def drive(port: int, lying: bool):
     # The first-page demo is real editable input, not a disappearing placeholder.
     assert at.text_area[0].value == PROMPT
     assert at.text_area[0].proto.form_id == "analysis_request"
-    at = click(at, "Load paper-bracket demo")
-    assert at.text_area[0].value == PAPER_BRACKET
-    assert at.session_state.stage == 0  # Loading an example never calls the model.
     at.text_area[0].input(" ")
     at = click(at, "Read my request")
     assert at.session_state.stage == 0
     assert any("Describe your part" in w.value for w in at.warning)
-    at = click(at, "Load L-bracket demo")
-    assert at.text_area[0].value == PROMPT
+    at.text_area[0].input(PROMPT)
     at = click(at, "Read my request")
     assert not at.exception, at.exception
     assert at.session_state.stage == 1, at.session_state.stage

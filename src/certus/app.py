@@ -34,7 +34,7 @@ import streamlit as st
 from certus import llm, discovery, review
 from certus import intent as INT
 from certus import ui
-from certus.demo import L_BRACKET, PAPER_BRACKET
+from certus.demo import L_BRACKET
 
 # Streamlit runs this script in a worker thread. gmsh.initialize() installs a
 # Ctrl-C signal handler by default, and Python allows that only in the main
@@ -233,18 +233,11 @@ def header():
 # 1 ASK
 # ---------------------------------------------------------------------------
 
-def load_demo(prompt):
-    S().ask_draft = prompt
-
-
 def stage_ask():
     ui.section_heading("01 / ENGINEERING INTENT", "Define your analysis",
                        "Describe the part, its loads and supports, and the decision you need to make.")
     entry, guide = st.columns([2.1, 1], gap="large")
     with entry:
-        demo1, demo2 = st.columns(2)
-        demo1.button("Load L-bracket demo", on_click=load_demo, args=(L_BRACKET,))
-        demo2.button("Load paper-bracket demo", on_click=load_demo, args=(PAPER_BRACKET,))
         S().setdefault("ask_draft", S().get("prompt") or L_BRACKET)
         with st.form("analysis_request", border=False):
             prompt = st.text_area("Your question", key="ask_draft", height=340)
@@ -255,13 +248,11 @@ def stage_ask():
             stp = c2.file_uploader("I already have a CAD file (STEP, optional)",
                                    type=["step", "stp"])
             submitted = st.form_submit_button("Read my request", type="primary")
-        st.caption("For the two-lug paper screenshot, load the paper-bracket demo before uploading. "
-                   "Check its extra dimensions against your source; they are explicit demo choices.")
     with guide:
         ui.review_guide()
     if submitted:
         if not prompt.strip():
-            st.warning("Describe your part and analysis, or load a demo above.")
+            st.warning("Describe your part and analysis before submitting.")
             return
         # Re-entering the workflow must not reuse geometry or results from an
         # earlier request. Keep the display preferences and connection settings.
