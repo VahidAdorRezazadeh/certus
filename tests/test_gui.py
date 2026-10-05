@@ -19,7 +19,7 @@ Two runs:
 
 from __future__ import annotations
 from certus.paths import EXAMPLE_STEP
-from certus.demo import L_BRACKET
+from certus.demo import DEFAULT_PROMPT, L_BRACKET
 REF_STEP = str(EXAMPLE_STEP)
 import json
 import os
@@ -149,12 +149,13 @@ def drive(port: int, lying: bool):
     at.sidebar.text_input[0].set_value(f"http://127.0.0.1:{port}/v1")
     at.run()
     # The first-page demo is real editable input, not a disappearing placeholder.
-    assert at.text_area[0].value == PROMPT
+    assert at.text_area[0].value == DEFAULT_PROMPT
     assert at.text_area[0].proto.form_id == "analysis_request"
     at.text_area[0].input(" ")
     at = click(at, "Read my request")
     assert at.session_state.stage == 0
     assert any("Describe your part" in w.value for w in at.warning)
+    # Keep the honest/lying solver benchmark on its established L-bracket fixture.
     at.text_area[0].input(PROMPT)
     at = click(at, "Read my request")
     assert not at.exception, at.exception

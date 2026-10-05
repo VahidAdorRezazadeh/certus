@@ -34,7 +34,7 @@ import streamlit as st
 from certus import llm, discovery, review
 from certus import intent as INT
 from certus import ui
-from certus.demo import L_BRACKET
+from certus.demo import DEFAULT_PROMPT
 
 # Streamlit runs this script in a worker thread. gmsh.initialize() installs a
 # Ctrl-C signal handler by default, and Python allows that only in the main
@@ -238,7 +238,7 @@ def stage_ask():
                        "Describe the part, its loads and supports, and the decision you need to make.")
     entry, guide = st.columns([2.1, 1], gap="large")
     with entry:
-        S().setdefault("ask_draft", S().get("prompt") or L_BRACKET)
+        S().setdefault("ask_draft", S().get("prompt") or DEFAULT_PROMPT)
         with st.form("analysis_request", border=False):
             prompt = st.text_area("Your question", key="ask_draft", height=340)
             st.caption("Edit or copy this example. Press Ctrl+Enter (Mac: ⌘+Enter) to read your request.")
