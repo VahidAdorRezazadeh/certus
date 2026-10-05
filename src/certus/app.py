@@ -34,6 +34,7 @@ import streamlit as st
 from certus import llm, discovery, review
 from certus import intent as INT
 from certus import ui
+from certus.demo import L_BRACKET, PAPER_BRACKET
 
 # Streamlit runs this script in a worker thread. gmsh.initialize() installs a
 # Ctrl-C signal handler by default, and Python allows that only in the main
@@ -232,10 +233,8 @@ def header():
 # 1 ASK
 # ---------------------------------------------------------------------------
 
-EXAMPLE = ("An L-shaped steel bracket, base 60 x 50 mm, 8 mm thick, upright "
-           "wall 30 mm high with a 10 mm hole near the top. A pin in the hole "
-           "pulls 2 kN downwards. The bottom face is bolted to the table. "
-           "Does it yield? Yield is 250 MPa.")
+def load_demo(prompt):
+    S().ask_draft = prompt
 
 
 def stage_ask():
@@ -243,20 +242,27 @@ def stage_ask():
                        "Describe the part, its loads and supports, and the decision you need to make.")
     entry, guide = st.columns([2.1, 1], gap="large")
     with entry:
-        prompt = st.text_area("Your question", S().get("prompt", ""),
-                              height=230, placeholder=EXAMPLE)
-        st.caption("State dimensions and units. Missing values will be asked for, not silently assumed.")
+        demo1, demo2 = st.columns(2)
+        demo1.button("Load L-bracket demo", on_click=load_demo, args=(L_BRACKET,))
+        demo2.button("Load paper-bracket demo", on_click=load_demo, args=(PAPER_BRACKET,))
+        S().setdefault("ask_draft", S().get("prompt") or L_BRACKET)
+        with st.form("analysis_request", border=False):
+            prompt = st.text_area("Your question", key="ask_draft", height=340)
+            st.caption("Edit or copy this example. Press Ctrl+Enter (Mac: ⌘+Enter) to read your request.")
+            c1, c2 = st.columns(2)
+            img = c1.file_uploader("Sketch or photo of the part (optional)",
+                                   type=["png", "jpg", "jpeg", "webp", "gif"])
+            stp = c2.file_uploader("I already have a CAD file (STEP, optional)",
+                                   type=["step", "stp"])
+            submitted = st.form_submit_button("Read my request", type="primary")
+        st.caption("For the two-lug paper screenshot, load the paper-bracket demo before uploading. "
+                   "Check its extra dimensions against your source; they are explicit demo choices.")
     with guide:
         ui.review_guide()
-    c1, c2 = st.columns(2)
-    img = c1.file_uploader("Sketch or photo of the part (optional)",
-                           type=["png", "jpg", "jpeg", "webp", "gif"])
-    stp = c2.file_uploader("I already have a CAD file (STEP, optional)",
-                           type=["step", "stp"])
-    if img is not None:
-        c1.image(img, width=320)
-    if st.button("Read my request", type="primary",
-                 disabled=not prompt.strip()):
+    if submitted:
+        if not prompt.strip():
+            st.warning("Describe your part and analysis, or load a demo above.")
+            return
         # Re-entering the workflow must not reuse geometry or results from an
         # earlier request. Keep the display preferences and connection settings.
         review.clear_derived(S())
@@ -270,8 +276,8 @@ def stage_ask():
                 S().intent = INT.read_intent(prompt, S().image)
             except Exception as e:
                 st.warning(f"The language model could not read the request "
-                           f"({type(e).__name__}: {e}). You can fill every "
-                           f"value by hand in stage 5.")
+                           f"({type(e).__name__}: {e}). Check the model connection, "
+                           f"then correct the request in the interpretation review.")
                 S().intent = INT.validate({}, prompt)
             S().spec = None
             if not S().step:
