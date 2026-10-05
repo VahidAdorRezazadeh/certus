@@ -11,7 +11,7 @@ Two runs:
   good    the stub reads the prompt faithfully. Expect a verdict page with a
           solved result and the load on the hole.
   lying   the stub puts 5000 N and aluminium in the form, words the user
-          never wrote. Expect both rejected and asked for in stage 5, so the
+          never wrote. Expect both rejected and asked for in stage 2, so the
           run cannot start until a human fills them.
 
     python test_gui.py
@@ -19,6 +19,7 @@ Two runs:
 
 from __future__ import annotations
 from certus.paths import EXAMPLE_STEP
+from certus.demo import DEFAULT_PROMPT, L_BRACKET
 REF_STEP = str(EXAMPLE_STEP)
 import json
 import os
@@ -27,10 +28,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-PROMPT = ("An L-shaped steel bracket, base 60 x 50 mm, 8 mm thick, upright "
-          "wall 30 mm high with a 10 mm hole near the top. A pin in the hole "
-          "pulls 2 kN downwards. The bottom face is bolted to the table. "
-          "Does it yield? Yield is 250 MPa.")
+PROMPT = L_BRACKET
 
 INTENT_GOOD = {
     "part": {"value": "L-shaped bracket, base 60 x 50 mm, 8 mm thick, wall "
@@ -62,7 +60,7 @@ SPEC = {"part_name": "L bracket", "tolerance_mm": 0.5,
         "target_volume_mm3": 37771.7,
         "features": ["base plate 60x50x8", "wall 60x8x30 at +Y edge",
                      "hole d10 along Y through the wall at Z=30"],
-        "assumptions": ["hole centre 8 mm below the top of the wall"]}
+        "assumptions": [], "questions": []}
 
 CODE = """
 base = Box(60, 50, 8, align=(Align.CENTER, Align.CENTER, Align.MIN))
@@ -71,7 +69,7 @@ hole = Pos(0, 21, 30) * Rot(90, 0, 0) * Cylinder(5, 20)
 part = base + wall - hole
 """
 
-MODE = {"intent": INTENT_GOOD}
+MODE = {"intent": INTENT_GOOD, "spec": SPEC}
 
 
 def _select(user_text: str) -> dict:
@@ -111,7 +109,7 @@ class Stub(BaseHTTPRequestHandler):
         if "fill a form" in system:
             out = json.dumps(MODE["intent"])
         elif system.startswith("You turn a part description"):
-            out = json.dumps(SPEC)
+            out = json.dumps(MODE["spec"])
         elif system.startswith("You are a CAD code generator"):
             out = "```python\n" + CODE + "\n```"
         elif system.startswith("You compare a generated CAD part"):
@@ -140,31 +138,52 @@ def click(at, label):
 def drive(port: int, lying: bool):
     from streamlit.testing.v1 import AppTest
     MODE["intent"] = INTENT_LYING if lying else INTENT_GOOD
+    MODE["spec"] = SPEC
     os.environ["CERTUS_LLM_PROVIDER"] = "openai"
     from certus import llm
     llm.CALL_LOG.clear()
     at = AppTest.from_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "certus", "app.py"), default_timeout=900)
     at.run()
-    at.sidebar.selectbox[0].set_value("other")
+    at.sidebar.selectbox[0].set_value("OpenAI-compatible server")
     at.run()
     at.sidebar.text_input[0].set_value(f"http://127.0.0.1:{port}/v1")
     at.run()
+    # The first-page demo is real editable input, not a disappearing placeholder.
+    assert at.text_area[0].value == DEFAULT_PROMPT
+    assert at.text_area[0].proto.form_id == "analysis_request"
+    at.text_area[0].input(" ")
+    at = click(at, "Read my request")
+    assert at.session_state.stage == 0
+    assert any("Describe your part" in w.value for w in at.warning)
+    # Keep the honest/lying solver benchmark on its established L-bracket fixture.
     at.text_area[0].input(PROMPT)
-    at.run()
     at = click(at, "Read my request")
     assert not at.exception, at.exception
     assert at.session_state.stage == 1, at.session_state.stage
-    table = at.dataframe[0].value
-    status = dict(zip(table["field"], table["status"]))
-    print("  stage 2 form:", {k: v.split()[0] for k, v in status.items()})
+    assert at.session_state.prompt == PROMPT
+    status = {k: f.status for k, f in at.session_state.intent.fields.items()}
+    print("  stage 2 form:", status)
+    assert not any(t.label == "specification (edit if wrong)" for t in at.text_area)
     if lying:
-        assert "not accepted" in status["force (N)"], status
-        assert "not accepted" in status["material"], status
-    else:
-        assert all("read" in v for k, v in status.items()
-                   if k != "pressure (MPa)"), status
-        assert "not stated" in status["pressure (MPa)"]
-
+        assert status["force_N"] == "rejected" and status["material"] == "rejected", status
+        assert [b for b in at.button if b.label == "Build the part"][0].disabled
+        return "lying run blocked at stage 2 as intended"
+    assert all(v == "read" for k, v in status.items() if k != "pressure_MPa"), status
+    assert status["pressure_MPa"] == "missing"
+    assert [b for b in at.button if b.label == "Build the part"][0].disabled
+    # A real correction request refreshes both drafts and retains unchanged inputs.
+    MODE["intent"] = dict(INTENT_GOOD, force_N={"value": 3000, "quote": "3 kN downwards"})
+    MODE["spec"] = dict(SPEC, part_name="Reviewed L bracket")
+    at.text_area[0].input("Change the force to 3 kN downwards; keep the geometry unchanged.")
+    at = click(at, "Update interpretation")
+    assert not at.exception, at.exception
+    assert at.session_state.intent.get("force_N") == 3000
+    assert at.session_state.intent.get("material") == "steel"
+    assert at.session_state.spec["part_name"] == "Reviewed L bracket"
+    assert "3 kN downwards" in at.session_state.prompt
+    for checkbox in at.checkbox:
+        checkbox.check()
+    at.run()
     at = click(at, "Build the part")
     assert not at.exception, at.exception
     print("  stage 3:", [s.value for s in at.success] or
@@ -188,11 +207,6 @@ def drive(port: int, lying: bool):
     run_btn = [b for b in at.button if b.label == "Run the simulation"][0]
     warns = [w.value for w in at.warning]
     print("  stage 5:", warns or "all values present")
-    if lying:
-        # the lying values were dropped: two questions stay open, and the
-        # run button stays disabled until a human answers them
-        assert run_btn.disabled and any("2 value" in w for w in warns), warns
-        return "lying run blocked at stage 5 as intended"
     assert not run_btn.disabled
     at = click(at, "Run the simulation")
     assert not at.exception, at.exception
@@ -202,7 +216,7 @@ def drive(port: int, lying: bool):
     print("  answer:", " ".join(at.markdown[i].value for i in
                                 range(len(at.markdown)))[:0] or "")
     assert m["result_trustworthy"] is not None, m["headline_verdict"]
-    assert abs(m["force_N"][2] + 2000) < 1e-6
+    assert abs(m["force_N"][2] + 3000) < 1e-6
     roles = [c["role"] for c in llm.CALL_LOG]
     print("  language model roles used:", sorted(set(roles)))
     return (f"good run reached a verdict: trustworthy="

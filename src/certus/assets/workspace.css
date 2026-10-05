@@ -1,0 +1,131 @@
+:root { --certus-navy:#102B3F; --certus-teal:#007A7C; --certus-slate:#536775; --certus-paper:#E4EBF0; }
+.stApp { background:var(--certus-paper); color:var(--certus-navy); }
+.stApp, .stApp p, .stApp input, .stApp textarea, .stApp button, .stApp select,
+.stApp label, .stApp [data-baseweb="select"] { font-family:'IBM Plex Sans', sans-serif; }
+.stApp h1,.stApp h2,.stApp h3 { font-family:'IBM Plex Sans',sans-serif; font-weight:600; letter-spacing:-.025em; color:var(--certus-navy); }
+.stApp h1 { font-size:2rem; } .stApp h2 {font-size:1.3rem;} .stApp h3 {font-size:1.1rem;}
+.stApp code, .stApp pre, [data-testid="stMetricValue"] {font-family:'IBM Plex Mono',monospace;}
+[data-testid="stHeader"] { background:var(--certus-paper); }
+/* Streamlit's fixed toolbar occupies the top of the page. Reserve space for it
+   so it cannot cover the product banner or crop the Verimech emblem. */
+[data-testid="stMainBlockContainer"] {padding:5rem 2.6rem 3rem; max-width:1700px;}
+[data-testid="stSidebar"] {background:#102B3F; border-right:1px solid #244154; color:#F4F7F8;}
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] {padding-top:1.3rem;}
+[data-testid="stSidebar"] h2,[data-testid="stSidebar"] h3,[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,[data-testid="stSidebar"] summary {color:#F4F7F8;}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {color:#bdcbd3; font-size:.76rem;}
+[data-testid="stSidebar"] [data-baseweb="select"], [data-testid="stSidebar"] input {color:#102B3F;}
+[data-testid="stSidebar"] [data-testid="stAlert"] p {color:inherit;}
+[data-testid="stSidebar"] [data-testid="stExpander"] {border-color:#385061;}
+[data-testid="stSidebar"] [data-testid="stButton"] button {background:#18384d;color:#f4f7f8;border-color:#526776;}
+[data-testid="stSidebar"] [data-testid="stButton"] button p {color:inherit;}
+.certus-brand {margin:-.5rem -.3rem 1.6rem;}
+.certus-brand img {display:block;width:205px;max-width:100%;}
+.certus-brand p {font-size:.6rem!important;line-height:1.8!important;letter-spacing:.15em;margin:0 0 0 15px;color:#c3d0d6!important;}
+.certus-topbar {display:flex;justify-content:space-between;align-items:center;background:#102B3F;border:1px solid #244154;border-radius:8px;padding:17px 24px;margin-bottom:18px;gap:20px;box-shadow:0 5px 18px rgba(16,43,63,.12);}
+.certus-product {display:flex;align-items:center;gap:18px;color:#FFFFFF;}
+.certus-product img {display:block;width:48px;height:42px;object-fit:contain;flex:none;}
+.certus-product-title {display:flex;flex-direction:column;justify-content:center;gap:1px;line-height:1.1;}
+.certus-product-title .certus-company {font-family:'IBM Plex Mono',monospace;font-size:.66rem;font-weight:600;letter-spacing:.17em;color:#8ED0CC;}
+.certus-product-title .certus-tool {font-size:1.5rem;font-weight:600;letter-spacing:-.03em;color:#FFFFFF;}
+.certus-product-kind {margin-left:12px;padding-left:22px;border-left:1px solid #5b7281;font-size:.83rem;font-weight:400;color:#D2E0E6;}
+.certus-pill {font-family:'IBM Plex Mono',monospace;font-size:.6rem;color:#E4F3F2;border:1px solid #6a8790;border-radius:4px;padding:6px 9px;letter-spacing:.07em;white-space:nowrap;}
+.certus-stepper {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:0;margin:0 0 22px;list-style:none;border:1px solid #b9c8d2;border-radius:6px;overflow:hidden;background:#fff;}
+.certus-stepper li {display:flex;flex-direction:column;gap:9px;padding:17px 16px 16px;border-right:1px solid #d5dfe5;border-bottom:4px solid transparent;min-width:0;}
+.certus-stepper li:last-child {border-right:0;}
+.certus-stepper li.current {background:#102B3F;border-bottom-color:#3BC4BA;}
+.certus-stepper li.previous {background:#edf4f4;border-bottom-color:#87aaa9;}
+.certus-step-number {font-family:'IBM Plex Sans',sans-serif;font-size:1.65rem;font-weight:600;line-height:1;color:#607889;font-variant-numeric:tabular-nums;letter-spacing:-.04em;}
+.certus-stepper strong {font-size:1.1rem;font-weight:600;display:block;line-height:1.3;color:#203e52;}
+.certus-stepper small {font-size:.78rem;display:block;color:#536775;margin-top:5px;line-height:1.4;}
+.certus-stepper .current strong {color:#fff;}
+.certus-stepper .current .certus-step-number {color:#78dbd1;}
+.certus-stepper .current small {color:#d1dfe8;}
+.certus-section-heading {display:flex;gap:20px;align-items:flex-start;margin:4px 0 16px;padding:8px 0 20px;border-bottom:1px solid #bacbd5;}
+.certus-section-number {flex:none;display:grid;place-items:center;width:66px;height:76px;border-left:4px solid #007A7C;background:#d1dfe6;color:#102B3F;font-size:2.4rem;font-weight:600;line-height:1;letter-spacing:-.05em;}
+.certus-section-category {font-family:'IBM Plex Sans',sans-serif!important;font-size:.85rem!important;font-weight:600;letter-spacing:.08em;line-height:1.3;margin:0 0 7px;color:#007174;}
+.certus-section-heading h1 {margin:0 0 8px;padding:0;line-height:1.2;font-size:2.05rem;}
+.certus-section-description {color:#415d70;font-size:.98rem;max-width:850px;line-height:1.5;margin:0;}
+.certus-guide {background:#fff;border:1px solid #b9cbd5;border-radius:6px;overflow:hidden;}
+.certus-guide-title {padding:18px 22px;background:#f2f6f8;border-bottom:1px solid #d5dfe5;}
+.certus-guide-title>span {font-size:.73rem;font-weight:600;letter-spacing:.1em;color:#007174;}
+.certus-guide-title h2 {font-size:1.17rem;margin:5px 0 0;padding:0;letter-spacing:-.02em;}
+.certus-guide ol {list-style:none;padding:0 22px;margin:0;}
+.certus-guide li {display:flex;gap:12px;padding:16px 0;border-bottom:1px solid #e0e7eb;}
+.certus-guide li:last-child {border:0;}
+.certus-guide li>span {flex:none;display:grid;place-items:center;width:26px;height:26px;background:#e4eff0;color:#007174;font-weight:600;font-size:.9rem;border-radius:3px;}
+.certus-guide h3 {font-size:.98rem;margin:0 0 5px;padding:0;line-height:1.35;letter-spacing:0;}
+.certus-guide p {font-size:.86rem;margin:0;line-height:1.5;color:#536775;}
+.certus-guide footer {padding:12px 22px;background:#f2f6f8;border-top:1px solid #d5dfe5;color:#536775;font-size:.77rem;line-height:1.5;}
+.certus-eyebrow {font-family:'IBM Plex Mono',monospace!important;font-size:.65rem!important;letter-spacing:.12em;line-height:1.5;color:#536775;margin:0;}
+.certus-note {padding:22px;background:#fff;border:1px solid #dce4e8;border-radius:8px;border-top:3px solid #007A7C;margin:0 0 16px;}
+.certus-note h3 {margin:0 0 9px;font-size:1rem;}.certus-note p {margin:0;color:#536775;line-height:1.7;font-size:.84rem;}
+[data-testid="stTextArea"] textarea {line-height:1.7;background:white;border-radius:6px;}
+[data-testid="stButton"] button, [data-testid="stDownloadButton"] button {border-radius:5px;min-height:40px;font-weight:600;}
+[data-testid="stButton"] button[kind="primary"] {background:#007A7C;border-color:#007A7C;color:white;}
+[data-testid="stButton"] button[kind="primary"]:hover {background:#006366;border-color:#006366;}
+[data-testid="stButton"] button:focus-visible, .stApp input:focus-visible, .stApp textarea:focus-visible {outline:3px solid #68b5b5;outline-offset:2px;}
+[data-testid="stFileUploader"] {border:1px dashed #b8c9d1;padding:12px;border-radius:7px;background:#fff;}
+[data-testid="stMetric"] {padding:16px 18px;background:white;border:1px solid #dce4e8;border-radius:6px;}
+[data-testid="stMetricLabel"] p {font-size:.73rem;color:#536775;}
+[data-testid="stMetricValue"] {font-size:1.4rem;font-weight:400;color:#102B3F;}
+[data-testid="stExpander"] {border:1px solid #d9e2e6;border-radius:6px;background:transparent;}
+[data-testid="stVerticalBlockBorderWrapper"]>div {border-color:#dce4e8!important;border-radius:8px!important;}
+div[class*="_viewport"] {background:#fff;}
+[data-testid="stPlotlyChart"] {border:1px solid #dce5ea;border-radius:6px;overflow:hidden;}
+.certus-viewport-footer {display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:.7rem;color:#536775;padding:8px 0;}
+.certus-viewport-footer span {display:inline-flex;gap:6px;align-items:center;}
+.certus-viewport-footer i {display:inline-block;width:9px;height:9px;border-radius:2px;}.certus-viewport-footer i.load {background:#df623e;}.certus-viewport-footer i.support {background:#327ca8;}
+.certus-verdict {padding:24px 28px;border:1px solid;border-left-width:5px;border-radius:6px;margin-bottom:4px;}
+.certus-verdict h2 {margin:7px 0;font-size:1.4rem;}.certus-verdict p:last-child {font-size:.88rem;margin-bottom:0;}
+.certus-verdict.pass {background:#edf6f1;border-color:#388063;}.certus-verdict.fail {background:#fcf0ed;border-color:#bb543d;}.certus-verdict.pending {background:#fff6e8;border-color:#ac7829;}
+[data-testid="stTabs"] [data-baseweb="tab-list"] {gap:24px;border-bottom:1px solid #d9e2e6;}
+[data-testid="stTabs"] [data-baseweb="tab"] {font-weight:600;}
+@media(max-width:1200px) {.certus-stepper li{padding:14px 10px;}.certus-stepper strong{font-size:1rem;}.certus-stepper small{font-size:.73rem;}[data-testid="stMainBlockContainer"]{padding:5rem 1.25rem 2rem;}}
+@media(max-width:700px) {.certus-stepper{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;}.certus-product-kind{display:none;}.certus-pill{font-size:.52rem;}.certus-product{gap:10px;}.certus-product img{width:38px;height:34px;}.certus-product-title .certus-tool{font-size:1.25rem;}.certus-topbar{gap:8px;padding:14px;}.certus-section-heading h1{font-size:1.7rem;}}
+@media(prefers-reduced-motion:reduce) {*,*::before,*::after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}
+
+/* Keep expanded and hovered sidebar sections on the dark surface. */
+[data-testid="stSidebar"] [data-testid="stExpander"] details,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:focus,
+[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+  background:#18384d !important; color:#F4F7F8 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary svg {color:#F4F7F8 !important;}
+[data-testid="stSidebar"] [data-baseweb="select"] p {color:#102B3F;}
+
+/* Interpretation review: grouped engineering fields, wrapped provenance. */
+.certus-review-table {border:1px solid #c3d1da;border-radius:8px;overflow:hidden;background:#f9fbfc;}
+.certus-review-table table {width:100%;border-collapse:collapse;table-layout:fixed;font-size:.86rem;line-height:1.45;}
+.certus-review-table caption {text-align:left;padding:12px 16px;color:#536775;font-size:.75rem;font-weight:600;letter-spacing:.05em;}
+.certus-review-table thead {background:#102B3F;color:#fff;}
+.certus-review-table thead th {padding:11px 14px;text-align:left;font-weight:600;}
+.certus-review-table thead th:first-child {width:26%;}
+.certus-review-table thead th:nth-child(2) {width:31%;}
+.certus-review-table tbody th,.certus-review-table td {text-align:left;vertical-align:top;padding:12px 14px;border-bottom:1px solid #dbe4e9;overflow-wrap:anywhere;}
+.certus-review-table tbody th {font-weight:600;color:#102B3F;}
+.certus-review-table .certus-review-group th {background:#e4eef1;color:#006467;font-size:.78rem;padding:10px 14px;letter-spacing:.03em;}
+.certus-review-table .certus-review-value {color:#102B3F;}
+.certus-review-status {display:block;font-size:.72rem;font-weight:600;margin-bottom:5px;}
+.certus-review-status.read {color:#17644d;}.certus-review-status.missing {color:#775300;}
+.certus-review-status.rejected {color:#a43827;}.certus-review-status.draft,.certus-review-status.preset {color:#36576e;}
+.certus-review-source {display:block;color:#536775;font-size:.77rem;}
+.certus-spec-summary {background:#f9fbfc;border:1px solid #c3d1da;border-top:3px solid #007A7C;border-radius:8px;padding:8px 18px 16px;}
+.certus-spec-summary dl {margin:0;}.certus-spec-summary dl div {display:grid;grid-template-columns:110px 1fr;gap:14px;padding:12px 0;border-bottom:1px solid #dbe4e9;}
+.certus-spec-summary dt {font-weight:600;font-size:.86rem;color:#102B3F;}.certus-spec-summary dd {margin:0;font-size:.86rem;color:#102B3F;overflow-wrap:anywhere;}
+.certus-spec-summary p {margin:14px 0 0;font-size:.78rem;color:#536775;}
+@media(max-width:700px) {.certus-review-table table{font-size:.78rem;}.certus-review-table tbody th,.certus-review-table td,.certus-review-table thead th{padding:9px 8px;}.certus-spec-summary dl div{grid-template-columns:90px 1fr;}}
+
+.certus-measurements {border:1px solid #c3d1da;border-radius:8px;background:#f9fbfc;overflow:hidden;}
+.certus-measurements header {display:flex;flex-direction:column;gap:5px;background:#102B3F;color:#fff;padding:16px 18px;}
+.certus-measurements header span {font-size:.7rem;letter-spacing:.08em;color:#b9d3df;}.certus-measurements header strong {font-size:1rem;}
+.certus-check-row {border-bottom:1px solid #dae3e9;border-left:4px solid;padding:13px 15px;}
+.certus-check-row.pass {border-left-color:#298063;}.certus-check-row.warn {border-left-color:#af7e18;background:#fff8e9;}.certus-check-row.fail {border-left-color:#b34336;background:#fff1ed;}
+.certus-check-row div {display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+.certus-check-row h4 {margin:0;color:#102B3F;font-size:.9rem;font-weight:600;}.certus-check-row span {font:600 .7rem 'IBM Plex Sans',sans-serif;}
+.certus-check-row.pass span {color:#17644d;}.certus-check-row.warn span {color:#805500;}.certus-check-row.fail span {color:#a4382b;}
+.certus-check-row p {margin:7px 0 0;color:#40576d;font-size:.8rem;line-height:1.55;overflow-wrap:anywhere;}
+.certus-measurements footer {padding:13px 16px;font-size:.73rem;color:#536775;line-height:1.5;}

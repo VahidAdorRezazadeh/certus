@@ -27,11 +27,14 @@ import json
 import os
 import shutil
 import time
+from uuid import uuid4
 
 import streamlit as st
 
-from certus import llm
+from certus import llm, discovery, review
 from certus import intent as INT
+from certus import ui
+from certus.demo import DEFAULT_PROMPT
 
 # Streamlit runs this script in a worker thread. gmsh.initialize() installs a
 # Ctrl-C signal handler by default, and Python allows that only in the main
@@ -51,7 +54,8 @@ HERE = os.getcwd()                  # restored after CAD generation
 WORK = os.path.join(str(RUNS), "gui")
 STAGES = ["Ask", "Understood", "Part", "Faces", "Details", "Verdict"]
 
-st.set_page_config(page_title="Certus", page_icon="🔩", layout="wide")
+st.set_page_config(page_title="Certus · Verimech", page_icon=ui.asset_uri("Verimech_Icon.svg"),
+                   layout="wide", initial_sidebar_state="expanded")
 
 
 # ---------------------------------------------------------------------------
@@ -88,68 +92,98 @@ def go(stage: int):
 
 def session_dir() -> str:
     if "dir" not in S():
-        S().dir = os.path.join(WORK, time.strftime("%Y-%m-%d_%H%M%S"))
+        S().dir = os.path.join(WORK, time.strftime("%Y-%m-%d_%H%M%S") + "_" + uuid4().hex[:8])
         os.makedirs(S().dir, exist_ok=True)
     return S().dir
 
 
 def save_upload(up, name=None) -> str:
-    p = os.path.join(session_dir(), name or up.name)
+    p = os.path.join(session_dir(), os.path.basename(name or up.name))
     with open(p, "wb") as f:
         f.write(up.getbuffer())
     return p
 
 
 def badge(status: str) -> str:
-    return {"read": "✅ read from your text",
-            "rejected": "⚠️ not accepted",
-            "missing": "❓ not stated"}[status]
+    return {"read": "Read · read from your text",
+            "rejected": "Rejected · not accepted",
+            "missing": "Missing · not stated"}[status]
 
 
 # ---------------------------------------------------------------------------
 # sidebar: the language model and the solver
 # ---------------------------------------------------------------------------
 
+def abaqus_available():
+    return bool(discovery.find_abaqus())
+
+
 def sidebar():
     sb = st.sidebar
-    sb.title("Certus")
-    sb.caption("Physics is computed, never generated.")
+    with sb:
+        ui.sidebar_brand()
+    sb.subheader("Analysis environment")
+    sb.caption("Local workspace · CalculiX solver")
+    sb.divider()
     sb.subheader("Language model")
-    kind = sb.radio("Where does the language model run?",
-                    ["On this computer (Ollama, LM Studio, ...)",
-                     "Claude API (cloud)"],
-                    index=0 if llm.CONFIG.provider == "openai" else 1)
-    if kind.startswith("Claude"):
-        model = sb.text_input("model", llm.CONFIG.model if
-                              llm.CONFIG.provider == "anthropic"
-                              else "claude-sonnet-5")
-        llm.configure(provider="anthropic", model=model)
+    provider = sb.selectbox("Provider", ["Local models", "Claude", "OpenAI-compatible server"],
+                            index=1 if llm.CONFIG.provider == "anthropic" else 0, key="llm_provider")
+    if provider == "Claude":
+        refresh = sb.button("Refresh models", key="refresh_cloud_models")
+        if (refresh or "claude_catalogue" not in S()) and os.environ.get("ANTHROPIC_API_KEY"):
+            try:
+                S().claude_catalogue = llm.list_claude_models()
+                S().pop("claude_catalogue_error", None)
+            except RuntimeError as exc:
+                S().claude_catalogue = []
+                S().claude_catalogue_error = str(exc)
+        models = S().get("claude_catalogue", [])
+        if S().get("claude_catalogue_error"):
+            sb.warning(S().claude_catalogue_error)
         if not os.environ.get("ANTHROPIC_API_KEY"):
-            sb.warning("ANTHROPIC_API_KEY is not set in this shell.")
+            sb.caption("Set ANTHROPIC_API_KEY in the shell running Certus to load your Claude models.")
+        llm.configure(provider="anthropic")
+        source_key = "claude"
     else:
-        presets = {"Ollama": llm.DEFAULT_BASE["ollama"],
-                   "LM Studio": llm.DEFAULT_BASE["lmstudio"], "other": None}
-        names = list(presets)
-        start = next((i for i, n in enumerate(names)
-                      if presets[n] == llm.CONFIG.base_url), 2)
-        preset = sb.selectbox("server", names, index=start)
-        base = sb.text_input("server address",
-                             presets[preset] or llm.CONFIG.base_url)
-        llm.configure(provider="openai", base_url=base)
-        models = llm.list_models()
-        if models:
-            cur = llm.CONFIG.model if llm.CONFIG.model in models else models[0]
-            model = sb.selectbox("model", models, index=models.index(cur))
+        if provider == "Local models":
+            refresh = sb.button("Scan this computer")
+            if refresh or "local_discovery" not in S():
+                S().local_discovery = discovery.scan_local_models()
+            detected = S().local_discovery
+            servers = detected["servers"]
+            selected = sb.selectbox("Model server", range(len(servers)),
+                                    index=next((i for i, x in enumerate(servers) if x["models"]), 0),
+                                    key="local_server", format_func=lambda i: servers[i]["name"] +
+                                    (" · available" if servers[i]["models"] else " · offline"))
+            server = servers[selected]
+            base = server["url"]
+            models = server["models"]
+            if not models:
+                sb.caption("Start this model server, then scan again to select a model.")
+            if detected["ollama_installed"]:
+                sb.caption("Ollama models on disk: " + ", ".join(detected["ollama_installed"]))
+            if detected.get("lmstudio_files"):
+                sb.caption("LM Studio files on disk: " + ", ".join(detected["lmstudio_files"]))
+            if detected["runtimes"]:
+                sb.caption("Installed command-line runtimes: " + ", ".join(detected["runtimes"]))
         else:
-            sb.caption("server not reachable, or it lists no models. "
-                       "Type the model name.")
-            model = sb.text_input(
-                "model", "" if llm.CONFIG.model.startswith("claude")
-                else llm.CONFIG.model, placeholder="for example qwen2.5vl:32b")
-        llm.configure(model=model)
-        sb.caption("A sketch or photo needs a vision model "
-                   "(for example qwen2.5vl or llama3.2-vision in Ollama). "
-                   "Writing build123d code needs a strong coding model.")
+            base = sb.text_input("API base URL", llm.CONFIG.base_url)
+            if sb.button("Refresh models", key="refresh_server_models") or S().get("catalogue_url") != base:
+                S().server_catalogue = discovery.server_models(base)
+                S().catalogue_url = base
+            models = S().get("server_catalogue", [])
+        llm.configure(provider="openai", base_url=base)
+        source_key = base
+        sb.caption("For images, select a model with vision support.")
+    if models:
+        current = llm.CONFIG.model
+        model = sb.selectbox("Model", models,
+                             index=models.index(current) if current in models else 0,
+                             key="model_" + source_key)
+    else:
+        model = sb.text_input("Model ID", "", key="manual_" + source_key,
+                              placeholder="Exact model ID from your provider")
+    llm.configure(model=model)
     if sb.button("Test the connection"):
         ok, msg = llm.ping()
         (sb.success if ok else sb.error)(msg)
@@ -162,14 +196,28 @@ def sidebar():
         sb.error("CalculiX (ccx) is not on PATH. Decks are written but "
                  "nothing is solved, so no verdict is possible.")
     S().ccx = bool(ccx)
-
-    sb.subheader("Language model calls so far")
-    if llm.CALL_LOG:
-        for c in llm.CALL_LOG[-12:]:
-            sb.caption(f"{c['role']}: {c['model']} "
-                       f"({c['chars']} chars, stop={c['stop']})")
+    abaqus_override = sb.text_input("Abaqus launcher (optional)",
+                                    os.environ.get("CERTUS_ABAQUS_COMMAND", ""),
+                                    placeholder="C:/SIMULIA/Commands/abaqus.bat")
+    if abaqus_override:
+        os.environ["CERTUS_ABAQUS_COMMAND"] = abaqus_override
     else:
-        sb.caption("none")
+        os.environ.pop("CERTUS_ABAQUS_COMMAND", None)
+    abaqus = discovery.find_abaqus()
+    if abaqus:
+        sb.success(f"Abaqus found: {abaqus}")
+        sb.caption("Abaqus deck export available. Automated solve and verdict use CalculiX.")
+    else:
+        sb.caption("Abaqus not found. Set its launcher path above if installed elsewhere.")
+
+    with sb.expander(f"Model activity · {len(llm.CALL_LOG)} calls"):
+        if llm.CALL_LOG:
+            for c in llm.CALL_LOG[-12:]:
+                st.caption(f"{c['role']}: {c['model']} "
+                           f"({c['chars']} chars, stop={c['stop']})")
+        else:
+            st.caption("No language-model calls in this session.")
+    sb.divider()
     if sb.button("Start over"):
         for k in list(S().keys()):
             del S()[k]
@@ -178,58 +226,55 @@ def sidebar():
 
 
 def header():
-    cur = S().get("stage", 0)
-    cols = st.columns(len(STAGES))
-    for i, (c, name) in enumerate(zip(cols, STAGES)):
-        mark = "●" if i == cur else ("✓" if i < cur else "○")
-        c.markdown(f"**{mark} {i+1}. {name}**" if i == cur
-                   else f"{mark} {i+1}. {name}")
-    st.divider()
+    ui.workspace_header(S().get("stage", 0))
 
 
 # ---------------------------------------------------------------------------
 # 1 ASK
 # ---------------------------------------------------------------------------
 
-EXAMPLE = ("An L-shaped steel bracket, base 60 x 50 mm, 8 mm thick, upright "
-           "wall 30 mm high with a 10 mm hole near the top. A pin in the hole "
-           "pulls 2 kN downwards. The bottom face is bolted to the table. "
-           "Does it yield? Yield is 250 MPa.")
-
-
 def stage_ask():
-    st.header("What do you want to know?")
-    st.write("Describe the part, where the load goes, what holds it, and "
-             "what you want to find out. Certus will ask for anything "
-             "missing.")
-    prompt = st.text_area("Your question", S().get("prompt", ""),
-                          height=150, placeholder=EXAMPLE)
-    c1, c2 = st.columns(2)
-    img = c1.file_uploader("Sketch or photo of the part (optional)",
-                           type=["png", "jpg", "jpeg", "webp", "gif"])
-    stp = c2.file_uploader("I already have a CAD file (STEP, optional)",
-                           type=["step", "stp"])
-    if img is not None:
-        c1.image(img, width=320)
-    if st.button("Read my request", type="primary",
-                 disabled=not prompt.strip()):
+    ui.section_heading("01 / ENGINEERING INTENT", "Define your analysis",
+                       "Describe the part, its loads and supports, and the decision you need to make.")
+    entry, guide = st.columns([2.1, 1], gap="large")
+    with entry:
+        S().setdefault("ask_draft", S().get("prompt") or DEFAULT_PROMPT)
+        with st.form("analysis_request", border=False):
+            prompt = st.text_area("Your question", key="ask_draft", height=340)
+            st.caption("Edit or copy this example. Press Ctrl+Enter (Mac: ⌘+Enter) to read your request.")
+            c1, c2 = st.columns(2)
+            img = c1.file_uploader("Sketch or photo of the part (optional)",
+                                   type=["png", "jpg", "jpeg", "webp", "gif"])
+            stp = c2.file_uploader("I already have a CAD file (STEP, optional)",
+                                   type=["step", "stp"])
+            submitted = st.form_submit_button("Read my request", type="primary")
+    with guide:
+        ui.review_guide()
+    if submitted:
+        if not prompt.strip():
+            st.warning("Describe your part and analysis before submitting.")
+            return
+        # Re-entering the workflow must not reuse geometry or results from an
+        # earlier request. Keep the display preferences and connection settings.
+        review.clear_derived(S())
+        S().review_revision = S().get("review_revision", 0) + 1
         S().prompt = prompt
         S().image = save_upload(img) if img is not None else None
         S().step = save_upload(stp, "input.step") if stp is not None else None
+        S().uploaded_step = stp is not None
         with st.spinner("The language model is reading your request..."):
             try:
                 S().intent = INT.read_intent(prompt, S().image)
             except Exception as e:
                 st.warning(f"The language model could not read the request "
-                           f"({type(e).__name__}: {e}). You can fill every "
-                           f"value by hand in stage 5.")
+                           f"({type(e).__name__}: {e}). Check the model connection, "
+                           f"then correct the request in the interpretation review.")
                 S().intent = INT.validate({}, prompt)
             S().spec = None
             if not S().step:
                 from certus import cad_agent as CA
-                part_text = S().intent.get("part") or prompt
                 with captured("specification"):
-                    S().spec = CA.call_llm_spec(part_text, S().image)
+                    S().spec = CA.call_llm_spec(prompt, S().image)
         go(1)
 
 
@@ -237,55 +282,78 @@ def stage_ask():
 # 2 UNDERSTOOD
 # ---------------------------------------------------------------------------
 
-LABELS = {"part": "part", "question": "your question",
-          "load_feature": "load acts on", "fix_feature": "held at",
-          "load_kind": "load kind", "force_N": "force (N)",
-          "direction": "direction", "pressure_MPa": "pressure (MPa)",
-          "material": "material", "goal": "goal",
-          "support": "support", "yield_MPa": "yield stress (MPa)"}
-
-
 def stage_understood():
-    st.header("What Certus understood")
+    from certus import model_agent as MA
+    from certus import cad_agent as CA
+    ui.section_heading("02 / INTERPRETATION", "Review what Certus understood",
+                       "Complete the engineering inputs and confirm the assumptions before building the model.")
     it: INT.Intent = S().intent
-    left, right = st.columns([1, 1])
+    uploaded = S().get("uploaded_step", bool(S().get("step") and not S().get("cad")))
+    spec = S().get("spec") or {}
+    revision = S().get("review_revision", 0)
+    material = MA.MATERIALS.get(it.get("material"))
+    left, right = st.columns([1.35, 1], gap="large")
     with left:
         st.subheader("From your text")
-        st.caption("A value is kept only if the model can quote the words "
-                   "you used, and any number must match the number and unit "
-                   "you wrote. Nothing here is a default.")
-        rows = []
-        for k in INT.FIELDS:
-            f = it.fields.get(k, INT.Field())
-            rows.append({"field": LABELS[k],
-                         "value": "" if f.value is None else str(f.value),
-                         "status": badge(f.status),
-                         "your words / reason": f.quote if f.status == "read"
-                         else f.note})
-        st.dataframe(rows, hide_index=True, width="stretch")
+        st.caption("Read values include your exact words. Missing and rejected inputs remain visible. "
+                   "Draft dimensions and material presets are labeled separately.")
+        ui.review_table(review.review_rows(it, None if uploaded else spec, material))
+    assumptions_ok = True
     with right:
-        if S().step:
+        if uploaded:
             st.subheader("Your CAD file")
-            st.write(f"`{os.path.basename(S().step)}` will be used as it is. "
-                     "No part is generated.")
+            st.write(f"{os.path.basename(S().step)} will be used as supplied.")
+            st.caption("Corrections update the analysis inputs. To replace this geometry, upload a new CAD file on the Ask page.")
         else:
-            st.subheader("Part specification (will be measured)")
-            spec = S().spec or {}
-            if spec.get("assumptions"):
-                st.warning("The model ASSUMED these. Check them:\n\n" +
-                           "\n".join(f"- {a}" for a in spec["assumptions"]))
-            txt = st.text_area("specification (edit if wrong)",
-                               json.dumps(spec, indent=2), height=380)
+            st.subheader("Part specification")
+            ui.part_summary(spec)
+            assumptions = spec.get("assumptions") or []
+            if assumptions:
+                st.warning("Assumptions to review:\n\n" +
+                           "\n".join(f"- {a}" for a in assumptions))
+                assumptions_ok = st.checkbox("I accept the listed geometry assumptions",
+                                              key=f"review_assumptions_{revision}")
+        st.subheader("Information needed")
+        questions = review.completion_questions(it, spec, uploaded)
+        if questions:
+            st.warning("Complete these in the correction prompt below:\n\n" +
+                       "\n".join(f"- {q}" for q in questions))
+        else:
+            st.success("Required draft inputs are present. Review them before continuing.")
+        st.caption("Load and support faces will still be confirmed on the 3D part. "
+                   "The Details page remains a final review before solving.")
+    st.divider()
+    st.subheader("Correct or complete the request")
+    st.caption("Describe the changes in plain language. Both review panels update together; "
+               "later corrections replace conflicting earlier statements.")
+    with st.form("review_correction", clear_on_submit=True):
+        correction = st.text_area("Your corrections or missing information", height=150,
+                                  placeholder="For example: the beam has a solid rectangular section, "
+                                  "200 mm wide and 50 mm thick. Apply 2 kN in -Z, not pressure.")
+        submitted = st.form_submit_button("Update interpretation", type="primary")
+    if submitted:
+        with st.spinner("Updating the interpretation and part specification..."):
             try:
-                S().spec = json.loads(txt)
-            except json.JSONDecodeError as e:
-                st.error(f"not valid JSON: {e}")
+                review.apply_revision(S(), correction, INT.read_intent, CA.call_llm_spec)
+            except Exception as exc:
+                st.error(f"Could not update the interpretation ({type(exc).__name__}: {exc}). "
+                         "The previous review remains available. Submit the correction again.")
+            else:
+                st.rerun()
+    material_ok = True
+    if material:
+        material_ok = st.checkbox(
+            f"I confirm the linear-elastic {material.name} preset: E = {material.E:g} MPa, ν = {material.nu:g}",
+            key=f"review_material_{revision}")
+        st.caption("A supplied yield strength is used to check first yield; it does not define a plastic material law.")
     c1, c2 = st.columns([1, 5])
     if c1.button("Back"):
         go(0)
-    if c2.button("Use the CAD file" if S().step else "Build the part",
-                 type="primary"):
-        go(3 if S().step else 2)
+    if c2.button("Use the CAD file" if uploaded else "Build the part", type="primary",
+                 disabled=bool(questions) or not assumptions_ok or not material_ok):
+        if not uploaded:
+            S().step = None
+        go(3 if uploaded else 2)
 
 
 # ---------------------------------------------------------------------------
@@ -294,51 +362,103 @@ def stage_understood():
 
 def stage_part():
     from certus import cad_agent as CA
-    st.header("The part")
-    if "cad" not in S():
-        with st.spinner("Writing build123d code, building, measuring. "
-                        "A local model can take several minutes."):
-            # cad_agent writes part.step, part_spec.json ... into the
-            # current folder. Run it inside this session's folder so the
-            # reference bracket in the repo is never overwritten. (chdir is
-            # process wide: fine for a one-user local app.)
-            with captured("CAD generation"):
-                os.chdir(session_dir())
-                try:
-                    S().cad = CA.generate(
-                        S().intent.get("part") or S().prompt, S().image,
-                        spec=S().spec, confirm=False)
-                finally:
-                    os.chdir(HERE)
+    ui.section_heading("03 / GEOMETRY", "Inspect the generated part",
+                       "Geometric measurements control this gate. The language model's visual review is advisory.")
+    if "cad" not in S() and "cad_error" not in S():
+        with st.spinner("Writing build123d code, building, measuring. A local model can take several minutes."):
+            log = io.StringIO()
+            retry = S().pop("cad_retry", {})
+            try:
+                with contextlib.redirect_stdout(log):
+                    os.chdir(session_dir())
+                    S().cad = CA.generate(S().prompt, S().image, spec=S().spec, confirm=False,
+                                          prior_code=retry.get("code"), prior_feedback=retry.get("feedback"))
+            except Exception as exc:
+                S().cad_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                os.chdir(HERE)
+                S().setdefault("logs", []).append(("CAD generation", log.getvalue()))
+    if "cad_error" in S():
+        st.error("The CAD build did not finish. Correct the geometry description or retry the build.")
+        with st.expander("Build error details"):
+            st.write(S().cad_error)
+        back, retry = st.columns(2)
+        if back.button("Correct the specification"):
+            S().pop("cad_error", None)
+            go(1)
+        if retry.button("Retry the build", type="primary"):
+            S().pop("cad_error", None)
+            st.rerun()
+        return
     cad = S().cad
-    for k in ("step", "drawing"):
+    for k in ("step", "drawing", "stl"):
         if cad.get(k) and not os.path.isabs(cad[k]):
             cad[k] = os.path.join(session_dir(), cad[k])
-    v = cad.get("verdict", "")
-    passed = v.startswith("PASS")
-    (st.success if passed else st.error)(f"Measured verification: {v}")
-    c1, c2 = st.columns([3, 2])
-    if cad.get("drawing") and os.path.exists(cad["drawing"]):
-        c1.image(cad["drawing"])
-    c2.text(CA.report_text(cad.get("results", [])))
+    # Re-run pure arithmetic when an existing session contains measurements
+    # from an earlier checker version; this does not invoke the model or CAD.
+    if cad.get("meas"):
+        cad["results"] = CA.check_spec(cad.get("spec") or S().spec, cad["meas"])
+    v, hard, soft = CA.verdict(cad.get("results", []))
+    cad["verdict"] = v
+    if hard:
+        st.error("Geometry does not match the specification. "
+                 "Review the failed checks below, then correct the specification or rebuild.")
+    elif soft:
+        st.warning("Geometry built successfully, with advisory measurement warnings. "
+                   "Review and acknowledge them before using the part.")
+    else:
+        st.success("Geometry built successfully and passed the measured checks.")
+    if cad.get("drawing_style") != 2 and cad.get("stl") and os.path.isfile(cad["stl"]):
+        with captured("refresh drawing preview"):
+            cad["drawing"] = CA.render_drawing(cad["stl"], os.path.join(session_dir(), "part_views_review.png"),
+                part_name=str((cad.get("spec") or {}).get("part_name", "Part")),
+                request=S().prompt, meta=cad.get("meas"), results=cad.get("results"))
+            cad["drawing_style"] = 2
+    c1, c2 = st.columns([2.3, 1], gap="large")
+    with c1:
+        if cad.get("step") and os.path.exists(cad["step"]):
+            from certus import viewer
+            if S().get("part_view_path") != cad["step"]:
+                with captured("geometry preview"):
+                    S().part_cat, S().part_tri = viewer.face_mesh(cad["step"])
+                    S().part_view_path = cad["step"]
+            if "part_cat" not in S():
+                with captured("face descriptions"):
+                    S().part_cat, S().part_tri = viewer.face_mesh(cad["step"])
+            ui.geometry_view(S().part_tri, hover=viewer.face_labels(S().part_cat), key="part")
+        if cad.get("drawing") and os.path.exists(cad["drawing"]):
+            with st.expander("Generated drawing"):
+                st.image(cad["drawing"], width="stretch")
+    c2.subheader("Measurement evidence")
+    with c2:
+        ui.measurement_evidence(cad.get("results", []))
     if cad.get("visual", {}).get("match") is False:
         c2.info("Advisory visual review by the language model (it cannot "
                 "change the verdict): " +
                 "; ".join(cad["visual"].get("discrepancies") or []))
-    b1, b2, b3 = st.columns([1, 1, 4])
+    warnings_accepted = not soft
+    if soft:
+        warnings_accepted = st.checkbox("I reviewed and accept the advisory geometry warnings", key="part_warnings_accepted")
+    b1, b2, b3 = st.columns([1.6, 1.2, 2.2])
     if b1.button("Back to the specification"):
         S().pop("cad")
+        S().pop("part_view_path", None)
         go(1)
     if b2.button("Build again"):
+        S().cad_retry = dict(code=cad.get("code"), feedback=CA.feedback_text(cad.get("results", []), cad.get("meas", {})))
         S().pop("cad")
+        S().pop("part_view_path", None)
+        S().pop("part_warnings_accepted", None)
         st.rerun()
-    if passed:
-        if b3.button("Use this part", type="primary"):
+    if not hard:
+        if b3.button("Use this part", type="primary", disabled=not warnings_accepted):
             S().step = cad["step"]      # already inside the session folder
+            S().uploaded_step = False
+            for key in ("tri", "cat", "rd", "conv"):
+                S().pop(key, None)
             go(3)
     else:
-        b3.warning("Certus does not simulate a part that failed its own "
-                   "measurements. Fix the specification or build again.")
+        b3.warning("A failed critical geometry check blocks simulation. Correct the specification or rebuild.")
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +485,8 @@ def _suggest(phrase, cat):
 def stage_faces():
     from certus import viewer
     from certus import geometry_features as GF
-    st.header("Where is the load, and what holds the part?")
+    ui.section_heading("04 / BOUNDARY CONDITIONS", "Confirm the physical setup",
+                       "Select catalogue features, inspect them in 3D, then explicitly confirm the load and support.")
     if "tri" not in S():
         with st.spinner("Reading faces..."):
             with captured("face catalogue"):
@@ -378,7 +499,7 @@ def stage_faces():
     opts = list(groups)
     fmt = lambda gid: groups[gid].summary()
 
-    left, right = st.columns([2, 3])
+    left, right = st.columns([1, 2.15], gap="large")
     with left:
         sl, sf = S().sug_load, S().sug_fix
         st.caption(f"Suggestion for the load: {sl[1]}")
@@ -389,7 +510,7 @@ def stage_faces():
         fg = st.selectbox("Held fixed at", opts, format_func=fmt,
                           index=opts.index(sf[0]) if sf[0] in opts else None,
                           placeholder="choose the feature")
-        for gid, role in ((lg, "LOAD (red)"), (fg, "FIXED (blue)")):
+        for gid, role in ((lg, "LOAD (orange)"), (fg, "SUPPORT (blue)")):
             if gid is not None:
                 st.text(f"{role}\n" + groups[gid].describe(cat.bbox_min,
                                                           cat.bbox_max))
@@ -399,22 +520,26 @@ def stage_faces():
         same = lg is not None and lg == fg
         if same:
             st.error("The load and the support are the same feature.")
-        ok = st.checkbox("I have looked at the 3D view: red is where the "
+        ok = st.checkbox("I have looked at the 3D view: orange is where the "
                          "load acts and blue is what is held.",
-                         disabled=lg is None or fg is None or same)
+                         disabled=lg is None or fg is None or same,
+                         key=f"confirm_faces_{lg}_{fg}")
     with right:
         hover = {}
+        names = viewer.face_labels(cat)
         for g in cat.groups:
             for t in g.tags:
-                hover[t] = g.summary()
-        st.plotly_chart(viewer.faces_figure(
-            tri, groups[lg].tags if lg is not None else (),
-            groups[fg].tags if fg is not None else (), hover),
-            width="stretch")
+                hover[t] = names.get(t, g.summary())
+        ui.geometry_view(tri, groups[lg].tags if lg is not None else (),
+                         groups[fg].tags if fg is not None else (), hover, key="faces",
+                         load_vector=_vector(dict(force=S().intent.get("force_N"), direction=S().intent.get("direction")))
+                         if S().intent.get("load_kind") == "force" else None,
+                         load_kind=S().intent.get("load_kind") or "force",
+                         support_label=S().intent.get("support") or "Selected support face")
     c1, c2 = st.columns([1, 5])
     if c1.button("Back"):
         go(1)
-    if c2.button("Next", type="primary", disabled=not ok):
+    if c2.button("Next", type="primary", disabled=not ok or lg is None or fg is None or same):
         S().load_gid, S().fix_gid = lg, fg
         go(4)
 
@@ -443,8 +568,9 @@ def _num(label, key, it, **kw):
 
 
 def stage_details():
-    from certus import model_agent as MA
-    st.header("The details the simulation needs")
+    from certus import model_agent as MA, viewer
+    ui.section_heading("05 / MODEL DEFINITION", "Complete the analysis model",
+                       "Review the load, material and analysis goal. No solve starts until the required inputs are present.")
     st.caption("Values read from your text are filled in. Empty boxes are "
                "the questions. Material constants come from Certus's own "
                "table, never from the language model.")
@@ -489,6 +615,14 @@ def stage_details():
     missing = sum(v is None or v == "" for v in need)
     if missing:
         st.warning(f"{missing} value(s) still needed.")
+    if S().get("tri") is not None:
+        with st.expander("Review geometry and selected boundary conditions", expanded=False):
+            cat = S().cat
+            vector = _vector(dict(force=force, direction=direction)) if kind == "force" else None
+            ui.geometry_view(S().tri, cat.group(S().load_gid).tags,
+                             cat.group(S().fix_gid).tags, hover=viewer.face_labels(cat), key="details",
+                             load_vector=vector, load_kind=kind or "force",
+                             support_label=support or "Selected support face")
     b1, b2 = st.columns([1, 5])
     if b1.button("Back"):
         go(3)
@@ -572,14 +706,15 @@ def answer_text(meta, form) -> str:
 def stage_verdict():
     from certus import model_agent as MA
     from certus import viewer
-    st.header("Verdict")
+    ui.section_heading("06 / RESULTS & EVIDENCE", "Review the analysis",
+                       "Inspect the numerical result together with the evidence and limitations that qualify it.")
     if "rd" not in S():
         with st.spinner("Meshing, writing the deck, running the pre-solve "
                         "checks, solving with CalculiX, running the "
                         "post-solve checks..."):
             with captured("simulation"):
                 S().rd = MA.run(S().step, "gui", **_run_args(),
-                                solvers=("calculix",),
+                                solvers=("calculix", "abaqus") if abaqus_available() else ("calculix",),
                                 target_size=S().form["size"],
                                 solve_with="calculix",
                                 run_root=session_dir())
@@ -587,20 +722,25 @@ def stage_verdict():
     meta = json.load(open(os.path.join(rd.path, "run.json")))
     trust = meta.get("result_trustworthy")
     head = meta.get("headline_verdict", "")
-    if trust is True:
-        st.success("RESULT PASSED EVERY CHECK THAT RAN")
-    elif trust is False:
-        st.error("SOLVED, BUT THE RESULT IS NOT TRUSTWORTHY")
-    else:
-        st.warning("NO TRUSTED RESULT (refused or not solved)")
-    st.write(head)
-
-    st.subheader("Your answer")
-    st.write(answer_text(meta, S().form))
+    ui.status_banner(trust, head)
+    ui.metric_row(meta)
+    result_tab, evidence_tab, report_tab = st.tabs(["Results", "Verification evidence", "Report & run data"])
+    with result_tab:
+        st.subheader("Your answer")
+        st.write(answer_text(meta, S().form))
+        frd = os.path.join(rd.path, "case_calculix", "case.frd")
+        deck = os.path.join(rd.path, (meta.get("decks") or {}).get(
+            "calculix", "case_calculix/case.inp"))
+        if os.path.exists(frd) and os.path.exists(deck):
+            ui.results_view(deck, frd)
+        else:
+            st.info("No solved field is available to display. Review the verification evidence for the reason.")
+        st.caption(f"Element: {meta.get('element_type', 'not available')} · "
+                   f"Computed mode: {meta.get('computed_mode', 'not available')}")
 
     t = meta.get("trust") or {}
-    c1, c2 = st.columns(2)
-    with c1:
+    with evidence_tab:
+        st.subheader("What the verdict covers")
         if t.get("blockers"):
             st.markdown("**Unresolved findings (these block the result)**")
             st.dataframe(t["blockers"], hide_index=True,
@@ -615,20 +755,6 @@ def stage_verdict():
         st.markdown("**Not checked**")
         for c in t.get("not_checked", []):
             st.write(f"- {c}")
-    with c2:
-        frd = os.path.join(rd.path, "case_calculix", "case.frd")
-        deck = os.path.join(rd.path, (meta.get("decks") or {}).get(
-            "calculix", "case_calculix/case.inp"))
-        if os.path.exists(frd) and os.path.exists(deck):
-            which = st.radio("colour by", ["displacement", "von Mises"],
-                             horizontal=True)
-            st.plotly_chart(viewer.result_figure(
-                deck, frd, "U" if which == "displacement" else "S"),
-                width="stretch")
-        st.caption(f"element {meta.get('element_type')}, "
-                   f"{meta.get('n_elements')} elements, size "
-                   f"{meta.get('char_size_mm') or 0:.3g} mm, mode "
-                   f"{meta.get('computed_mode')}")
 
     st.subheader("Mesh convergence")
     if "conv" in S():
@@ -650,13 +776,22 @@ def stage_verdict():
         S().conv = text
         st.rerun()
 
-    rep = os.path.join(rd.path, "REPORT.txt")
-    if os.path.exists(rep):
-        st.download_button("Download REPORT.txt", open(rep, "rb").read(),
-                           "REPORT.txt")
-        with st.expander("full report"):
-            st.text(open(rep, encoding="utf-8", errors="replace").read())
-    st.caption(f"run folder: {rd.path}")
+    with report_tab:
+        rep = os.path.join(rd.path, "REPORT.txt")
+        if os.path.exists(rep):
+            with open(rep, "rb") as stream:
+                st.download_button("Download REPORT.txt", stream.read(), "REPORT.txt")
+            with st.expander("Full report"):
+                with open(rep, encoding="utf-8", errors="replace") as stream:
+                    st.text(stream.read())
+        st.download_button("Download run.json", json.dumps(meta, indent=2), "run.json", "application/json")
+        for solver, relative_path in meta.get("decks", {}).items():
+            deck_path = os.path.join(rd.path, relative_path)
+            if os.path.isfile(deck_path):
+                with open(deck_path, "rb") as stream:
+                    st.download_button(f"Download {solver} input deck", stream.read(),
+                                       f"{solver}.inp", key=f"download_{solver}_deck")
+        st.caption(f"Run folder: {rd.path}")
     if st.button("Change the details and run again"):
         S().pop("rd")
         S().pop("conv", None)
@@ -667,6 +802,7 @@ def stage_verdict():
 
 def main():
     S().setdefault("stage", 0)
+    ui.apply_theme()
     sidebar()
     header()
     [stage_ask, stage_understood, stage_part, stage_faces, stage_details,
